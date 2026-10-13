@@ -963,45 +963,6 @@ show_table(anova_results)
 
 ```
 
-#### Reduced random effects sensitivity
-
-```{r study2-reduced}
-
-reduced_results = list()
-variance_checks = list()
-for (measure in c("sabotage", "deescalation")) {
-  original = if (measure == "sabotage") fit_sabotage else fit_deescalation
-  vc = as.data.frame(VarCorr(original))
-  vc$outcome = measure
-  variance_checks[[measure]] = vc
-  stopifnot(original@optinfo$conv$opt == 0)
-  if (isSingular(original)) {
-    stopifnot(vc$vcov[vc$grp == "vignette"] < 1e-6)
-    reduced = lmer(score ~ condition + (1 | participant), data = filter(long, outcome == measure))
-    stopifnot(!isSingular(reduced), is.null(reduced@optinfo$conv$lme4$messages))
-    comparison = as.data.frame(summary(pairs(emmeans(reduced, ~ condition)), infer = TRUE))
-    comparison$outcome = measure
-    comparison$participant_variance = as.data.frame(VarCorr(reduced))$vcov[1]
-    comparison$residual_variance = sigma(reduced)^2
-    comparison$singular = isSingular(reduced)
-    comparison$optimizer_ok = is.null(reduced@optinfo$conv$lme4$messages)
-    comparison$original_estimate = filter(contrasts, outcome == measure)$estimate
-    comparison$estimate_change = comparison$estimate - comparison$original_estimate
-    comparison$original_SE = filter(contrasts, outcome == measure)$SE
-    comparison$original_df = filter(contrasts, outcome == measure)$df
-    comparison$original_p = filter(contrasts, outcome == measure)$p.value
-    comparison$SE_change = comparison$SE - comparison$original_SE
-    comparison$df_change = comparison$df - comparison$original_df
-    comparison$p_change = comparison$p.value - comparison$original_p
-    reduced_results[[measure]] = comparison
-  }
-}
-results$study2$registered_variances = bind_rows(variance_checks)
-results$study2$reduced = bind_rows(reduced_results)
-show_table(select(results$study2$registered_variances, outcome, grp, vcov))
-
-```
-
 ### Study 3a
 
 ```{r study3a-registered-data}
@@ -1086,49 +1047,6 @@ show_table(anova_results)
 
 ```
 
-#### Reduced random effects sensitivity
-
-```{r study3a-reduced}
-
-reduced_results = list()
-variance_checks = list()
-for (measure in c("sabotage", "deescalation")) {
-  original = if (measure == "sabotage") fit_sabotage else fit_deescalation
-  vc = as.data.frame(VarCorr(original))
-  vc$outcome = measure
-  variance_checks[[measure]] = vc
-  stopifnot(original@optinfo$conv$opt == 0)
-  if (isSingular(original)) {
-    stopifnot(vc$vcov[vc$grp == "vignette"] < 1e-6)
-    reduced = lmer(score ~ condition + (1 | participant), data = filter(long, outcome == measure))
-    stopifnot(!isSingular(reduced), is.null(reduced@optinfo$conv$lme4$messages))
-    comparison = as.data.frame(summary(pairs(emmeans(reduced, ~ condition)), infer = TRUE))
-    comparison$outcome = measure
-    comparison$participant_variance = as.data.frame(VarCorr(reduced))$vcov[1]
-    comparison$residual_variance = sigma(reduced)^2
-    comparison$singular = isSingular(reduced)
-    comparison$optimizer_ok = is.null(reduced@optinfo$conv$lme4$messages)
-    comparison$original_estimate = filter(contrasts, outcome == measure)$estimate
-    comparison$estimate_change = comparison$estimate - comparison$original_estimate
-    comparison$original_SE = filter(contrasts, outcome == measure)$SE
-    comparison$original_df = filter(contrasts, outcome == measure)$df
-    comparison$original_p = filter(contrasts, outcome == measure)$p.value
-    comparison$SE_change = comparison$SE - comparison$original_SE
-    comparison$df_change = comparison$df - comparison$original_df
-    comparison$p_change = comparison$p.value - comparison$original_p
-    reduced_results[[measure]] = comparison
-  }
-}
-results$study3a$registered_variances = bind_rows(variance_checks)
-results$study3a$reduced = bind_rows(reduced_results)
-show_table(select(results$study3a$registered_variances, outcome, grp, vcov))
-show_table(transmute(results$study3a$reduced, Measure = outcome,
-                     `Participant variance` = participant_variance,
-                     `Residual variance` = residual_variance,
-                     Singular = singular, `Optimizer OK` = optimizer_ok))
-
-```
-
 ### Study 3b
 
 ```{r study3b-registered-data}
@@ -1210,49 +1128,6 @@ anova_results = bind_rows(anova_results)
 results$study3b$anova = anova_results
 
 show_table(anova_results)
-
-```
-
-#### Reduced random effects sensitivity
-
-```{r study3b-reduced}
-
-reduced_results = list()
-variance_checks = list()
-for (measure in c("sabotage", "deescalation")) {
-  original = if (measure == "sabotage") fit_sabotage else fit_deescalation
-  vc = as.data.frame(VarCorr(original))
-  vc$outcome = measure
-  variance_checks[[measure]] = vc
-  stopifnot(original@optinfo$conv$opt == 0)
-  if (isSingular(original)) {
-    stopifnot(vc$vcov[vc$grp == "vignette"] < 1e-6)
-    reduced = lmer(score ~ condition + (1 | participant), data = filter(long, outcome == measure))
-    stopifnot(!isSingular(reduced), is.null(reduced@optinfo$conv$lme4$messages))
-    comparison = as.data.frame(summary(pairs(emmeans(reduced, ~ condition)), infer = TRUE))
-    comparison$outcome = measure
-    comparison$participant_variance = as.data.frame(VarCorr(reduced))$vcov[1]
-    comparison$residual_variance = sigma(reduced)^2
-    comparison$singular = isSingular(reduced)
-    comparison$optimizer_ok = is.null(reduced@optinfo$conv$lme4$messages)
-    comparison$original_estimate = filter(contrasts, outcome == measure)$estimate
-    comparison$estimate_change = comparison$estimate - comparison$original_estimate
-    comparison$original_SE = filter(contrasts, outcome == measure)$SE
-    comparison$original_df = filter(contrasts, outcome == measure)$df
-    comparison$original_p = filter(contrasts, outcome == measure)$p.value
-    comparison$SE_change = comparison$SE - comparison$original_SE
-    comparison$df_change = comparison$df - comparison$original_df
-    comparison$p_change = comparison$p.value - comparison$original_p
-    reduced_results[[measure]] = comparison
-  }
-}
-results$study3b$registered_variances = bind_rows(variance_checks)
-results$study3b$reduced = bind_rows(reduced_results)
-show_table(select(results$study3b$registered_variances, outcome, grp, vcov))
-show_table(transmute(results$study3b$reduced, Measure = outcome,
-                     `Participant variance` = participant_variance,
-                     `Residual variance` = residual_variance,
-                     Singular = singular, `Optimizer OK` = optimizer_ok))
 
 ```
 
@@ -1424,13 +1299,6 @@ df = df %>%
               summarise(score = mean(score)) %>%
               pivot_wider(names_from = measure, values_from = score),
             by = "participant") %>%
-  left_join(story_scores %>%
-              filter(vignette != "2") %>%
-              group_by(participant, measure) %>%
-              summarise(score = mean(score)) %>%
-              mutate(measure = str_c(measure, "_without2")) %>%
-              pivot_wider(names_from = measure, values_from = score),
-            by = "participant") %>%
   mutate(participant = factor(participant))
 
 df.supplementary1 = df
@@ -1446,9 +1314,8 @@ show_table(score_checks)
 descriptives = list()
 comparisons = list()
 for (measure in measures) {
-  for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3", "Vignettes 1 and 3")) {
-    column = if (part == "Overall") measure else if (part == "Vignettes 1 and 3")
-      paste0(measure, "_without2") else paste0(measure, "_", substr(part, 10, 10))
+  for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3")) {
+    column = if (part == "Overall") measure else paste0(measure, "_", substr(part, 10, 10))
     d = data.frame(condition = df$condition, score = df[[column]])
     model = lm(score ~ condition, data = d)
     comparison = as.data.frame(summary(contrast(emmeans(model, ~ condition),
@@ -1503,11 +1370,6 @@ for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
 anova_results = bind_rows(anova_results)
 show_table(select(anova_results, measure, term, df1_GG, df2_GG, F, p_GG) %>% mutate(measure = unname(measure_labels[measure])))
 results$supplementary_study1$anova = anova_results
-# The source averages 14 answered items for one participant. Quantify that difference.
-source_model = lm(as.numeric(selected$DeescalateBehaviorAvg) ~ df$condition)
-source_contrast = as.data.frame(summary(contrast(emmeans(source_model, ~ condition),
-  method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
-results$supplementary_study1$source_missing_item_comparison = source_contrast
 
 ```
 
@@ -1694,13 +1556,6 @@ df = df %>%
               summarise(score = mean(score)) %>%
               pivot_wider(names_from = measure, values_from = score),
             by = "participant") %>%
-  left_join(story_scores %>%
-              filter(vignette != "2") %>%
-              group_by(participant, measure) %>%
-              summarise(score = mean(score)) %>%
-              mutate(measure = str_c(measure, "_without2")) %>%
-              pivot_wider(names_from = measure, values_from = score),
-            by = "participant") %>%
   mutate(participant = factor(participant))
 
 df.supplementary2 = df
@@ -1716,9 +1571,8 @@ show_table(score_checks)
 descriptives = list()
 comparisons = list()
 for (measure in measures) {
-  for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3", "Vignettes 1 and 3")) {
-    column = if (part == "Overall") measure else if (part == "Vignettes 1 and 3")
-      paste0(measure, "_without2") else paste0(measure, "_", substr(part, 10, 10))
+  for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3")) {
+    column = if (part == "Overall") measure else paste0(measure, "_", substr(part, 10, 10))
     d = data.frame(condition = df$condition, score = df[[column]])
     model = lm(score ~ condition, data = d)
     comparison = as.data.frame(summary(contrast(emmeans(model, ~ condition),
@@ -1776,11 +1630,11 @@ results$supplementary_study2$anova = anova_results
 
 ```
 
-#### Registered second attention check sensitivity
+#### Registered attention-check exclusions
 
 ```{r supplementary_study2-second-check}
 
-# The supplied sample retains 27 failures; this sensitivity applies the registered check.
+# The supplied sample retains 27 failures; apply the registered second attention check.
 strict = df[as.numeric(selected$DifferentCheck) == 2, ]
 strict$participant = droplevels(strict$participant)
 stopifnot(nrow(strict) == 232)
@@ -2064,13 +1918,6 @@ df = df %>%
               summarise(score = mean(score)) %>%
               pivot_wider(names_from = measure, values_from = score),
             by = "participant") %>%
-  left_join(story_scores %>%
-              filter(vignette != "2") %>%
-              group_by(participant, measure) %>%
-              summarise(score = mean(score)) %>%
-              mutate(measure = str_c(measure, "_without2")) %>%
-              pivot_wider(names_from = measure, values_from = score),
-            by = "participant") %>%
   mutate(participant = factor(participant))
 
 df.supplementary3 = df
@@ -2086,8 +1933,7 @@ descriptives = list()
 comparisons = list()
 for (measure in measures) {
   for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3")) {
-    column = if (part == "Overall") measure else if (part == "Vignettes 1 and 3")
-      paste0(measure, "_without2") else paste0(measure, "_", substr(part, 10, 10))
+    column = if (part == "Overall") measure else paste0(measure, "_", substr(part, 10, 10))
     d = data.frame(condition = df$condition, score = df[[column]])
     model = lm(score ~ condition, data = d)
     comparison = as.data.frame(summary(contrast(emmeans(model, ~ condition),
@@ -2373,13 +2219,6 @@ df = df %>%
               summarise(score = mean(score)) %>%
               pivot_wider(names_from = measure, values_from = score),
             by = "participant") %>%
-  left_join(story_scores %>%
-              filter(vignette != "2") %>%
-              group_by(participant, measure) %>%
-              summarise(score = mean(score)) %>%
-              mutate(measure = str_c(measure, "_without2")) %>%
-              pivot_wider(names_from = measure, values_from = score),
-            by = "participant") %>%
   mutate(participant = factor(participant))
 
 df.supplementary4 = df
@@ -2395,8 +2234,7 @@ descriptives = list()
 comparisons = list()
 for (measure in measures) {
   for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3")) {
-    column = if (part == "Overall") measure else if (part == "Vignettes 1 and 3")
-      paste0(measure, "_without2") else paste0(measure, "_", substr(part, 10, 10))
+    column = if (part == "Overall") measure else paste0(measure, "_", substr(part, 10, 10))
     d = data.frame(condition = df$condition, score = df[[column]])
     model = lm(score ~ condition, data = d)
     comparison = as.data.frame(summary(contrast(emmeans(model, ~ condition),
@@ -2576,19 +2414,6 @@ show_table(model_checks)
 stopifnot(all(model_checks$optimizer_code == 0), !any(model_checks$singular))
 results$primary = primary
 results$primary_checks = model_checks
-
-```
-
-## RESULTS
-
-```{r results}
-
-dput(results, file = "paper_results.txt")
-write_csv(bind_rows(primary$study1$contrasts %>% mutate(study = "Study 1"),
-                    primary$study2$contrasts %>% mutate(study = "Study 2"),
-                    primary$study3a$contrasts %>% mutate(study = "Study 3a"),
-                    primary$study3b$contrasts %>% mutate(study = "Study 3b")),
-          "paper_comparisons.csv")
 
 ```
 

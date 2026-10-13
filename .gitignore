@@ -8,3 +8,7 @@ Rplots.pdf
 code/R/paper_files/
 code/R/paper.knit.md
 code/R/paper.utf8.md
+
+# Numerical exports are kept in the working repository.
+code/R/paper_results.txt
+code/R/paper_comparisons.csv

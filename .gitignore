@@ -1,0 +1,10 @@
+.DS_Store
+._*
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+Rplots.pdf
+code/R/paper_files/
+code/R/paper.knit.md
+code/R/paper.utf8.md

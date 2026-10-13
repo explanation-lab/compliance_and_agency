@@ -1,0 +1,2601 @@
+---
+title: "Conflicting values in individuals and organizations"
+author: "Sarah G. Milliron, John M. Doris, Kristin Smith-Crowe and Laura Niemi"
+output:
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+    self_contained: true
+    mathjax: null
+---
+
+# Load packages
+
+```{r packages, message=FALSE, warning=FALSE}
+
+library("tidyverse")  # data preparation and plots
+library("lmerTest")   # linear mixed models
+library("emmeans")    # condition comparisons
+library("boot")       # participant bootstrap mediation
+library("knitr")      # tables
+
+```
+
+# Settings
+
+```{r settings}
+
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, cache = FALSE,
+                     error = FALSE, fig.width = 12, fig.height = 5,
+                     out.width = "100%")
+options(dplyr.summarise.inform = FALSE)
+emm_options(lmer.df = "satterthwaite")
+theme_set(theme_classic(base_size = 18))
+condition_colors = c("Agency" = "#E41A1C", "Compliance" = "#377EB8")
+results = list()
+primary = list()
+
+show_table = function(x) {
+  x = as.data.frame(x)
+  for (name in intersect(names(x), c("p.value", "Pr(>F)", "p_GG"))) {
+    x[[name]] = ifelse(x[[name]] < .001, "< .001", sprintf("%.3f", x[[name]]))
+  }
+  knitr::kable(x, digits = 3, row.names = FALSE)
+}
+
+```
+
+# STUDY 1
+
+## DATA
+
+### Read in data
+
+```{r study1-read}
+
+raw.study1 = read_csv("../../data/main/study1/study1.csv") %>%
+  rename_with(str_trim)
+
+df.study1 = raw.study1 %>%
+  filter(Exclusion == 0, Finished == 1) %>%
+  mutate(participant = factor(ID),
+         condition = factor(Condition, levels = c(1, 2),
+                            labels = c("Agency", "Compliance")))
+
+stopifnot(nrow(df.study1) == 148, !anyDuplicated(df.study1$participant),
+          !anyNA(df.study1$condition), all(df.study1$Finished == 1))
+
+```
+
+### Wrangle
+
+```{r study1-wrangle}
+
+# Unchecked boxes are zero for the included completed surveys.
+items.study1 = df.study1 %>%
+  select(participant, condition, matches("^SabotageBehaviorV[123]Q[1-5]$")) %>%
+  pivot_longer(-c(participant, condition),
+               names_to = c("vignette", "item"),
+               names_pattern = "SabotageBehaviorV([123])Q([1-5])",
+               values_to = "endorsement") %>%
+  mutate(endorsement = replace_na(endorsement, 0))
+
+stopifnot(all(items.study1$endorsement %in% 0:1))
+
+long.study1 = items.study1 %>%
+  group_by(participant, condition, vignette) %>%
+  summarise(score = sum(endorsement), .groups = "drop") %>%
+  mutate(vignette = factor(vignette))
+
+df.study1 = df.study1 %>%
+  left_join(long.study1 %>%
+              select(participant, vignette, score) %>%
+              pivot_wider(names_from = vignette, values_from = score,
+                          names_prefix = "sabotage_"),
+            by = "participant") %>%
+  mutate(total_sabotage = sabotage_1 + sabotage_2 + sabotage_3,
+         sabotage = total_sabotage / 3)
+
+stopifnot(all(df.study1$sabotage_1 == df.study1$SabotageBehaviorV1Sum),
+          all(df.study1$sabotage_2 == df.study1$SabotageBehaviorV2Sum),
+          all(df.study1$sabotage_3 == df.study1$SabotageBehaviorV3Sum),
+          all(abs(df.study1$sabotage - df.study1$SabotageBehaviorAvg) < 1e-6))
+
+results$study1 = list(descriptives = df.study1 %>%
+  group_by(condition) %>%
+  summarise(n = n(), mean = mean(total_sabotage), sd = sd(total_sabotage)))
+
+```
+
+## STATS
+
+### Linear mixed models
+
+```{r study1-models}
+
+fit.study1.sabotage = lmer(
+  score ~ condition * vignette + (1 | participant),
+  data = long.study1)
+
+summary(fit.study1.sabotage)
+
+```
+
+### Follow up comparisons
+
+```{r study1-comparisons}
+
+means.study1.sabotage = emmeans(fit.study1.sabotage, ~ condition, weights = "equal")
+comparison.study1.sabotage = summary(pairs(means.study1.sabotage), infer = TRUE)
+comparison.study1.sabotage
+
+joint_tests(fit.study1.sabotage, weights = "equal")
+
+primary$study1 = list(contrasts = bind_rows(as_tibble(comparison.study1.sabotage) %>% mutate(outcome = "sabotage")))
+
+primary$study1$tests = bind_rows(as_tibble(joint_tests(fit.study1.sabotage, weights = "equal")) %>% mutate(outcome = "sabotage"))
+
+```
+
+### Means and confidence intervals
+
+```{r study1-means}
+
+descriptives.study1 = df.study1 %>%
+  select(participant, condition, sabotage) %>%
+  pivot_longer(-c(participant, condition), names_to = "outcome", values_to = "score") %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n(), mean = mean(score), sd = sd(score))
+
+show_table(descriptives.study1)
+primary$study1$descriptives = descriptives.study1
+
+plot.means.study1 = descriptives.study1 %>%
+  mutate(se = sd / sqrt(n),
+         lower = mean - qt(.975, n - 1) * se,
+         upper = mean + qt(.975, n - 1) * se) %>%
+  mutate(outcome = factor(outcome, levels = c("sabotage", "deescalation"),
+                          labels = c("Sabotage", "De-escalation")))
+
+show_table(plot.means.study1)
+primary$study1$means = plot.means.study1
+
+```
+
+## PLOTS
+
+```{r study1-plot, fig.width=7, fig.height=5}
+
+plot.data.study1 = df.study1 %>%
+  select(participant, condition, sabotage) %>%
+  pivot_longer(-c(participant, condition), names_to = "outcome", values_to = "score") %>%
+  mutate(outcome = factor(outcome, levels = c("sabotage", "deescalation"),
+                          labels = c("Sabotage", "De-escalation")))
+
+plot.counts.study1 = plot.data.study1 %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n_distinct(participant), .groups = "drop")
+
+plot.study1 = ggplot(plot.data.study1, aes(condition, score, color = condition)) +
+  geom_point(position = position_jitter(width = .16, height = 0, seed = 1),
+             alpha = .18, size = 1.5) +
+  geom_errorbar(data = plot.means.study1,
+                aes(y = mean, ymin = lower, ymax = upper),
+                width = .10, linewidth = .8, color = "black") +
+  geom_point(data = plot.means.study1, aes(y = mean),
+             shape = 21, fill = "white", color = "black", size = 4, stroke = 1) +
+  geom_text(data = plot.counts.study1,
+            aes(y = -.80, label = paste0("n=", n)),
+            color = "#333333", size = 4.3) +
+  facet_wrap(~ outcome, nrow = 1) +
+  scale_color_manual(values = condition_colors, guide = "none") +
+  scale_y_continuous(breaks = 0:5) +
+  coord_cartesian(ylim = c(0, 5), clip = "off") +
+  labs(x = NULL, y = "Number of sabotage\nactions selected\n(average per scenario)") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 18),
+        axis.title.y = element_text(size = 18, lineheight = .95),
+        axis.text = element_text(size = 16),
+        panel.spacing = unit(1, "cm"),
+        plot.margin = margin(5.5, 5.5, 25, 5.5))
+
+plot.study1
+
+ggsave("../../figures/main/study1/study1.pdf", plot.study1,
+       width = 7, height = 5, bg = "white")
+ggsave("../../figures/main/study1/study1.png", plot.study1,
+       width = 7, height = 5, dpi = 600, bg = "white")
+
+```
+
+# STUDY 2
+
+## DATA
+
+### Read in data
+
+```{r study2-read}
+
+raw.study2 = read_csv("../../data/main/study2/study2.csv") %>%
+  rename_with(str_trim)
+
+df.study2 = raw.study2 %>%
+  filter(Exclusion == 0) %>%
+  mutate(participant = factor(ResponseId),
+         condition = factor(Condition, levels = c(1, 2),
+                            labels = c("Agency", "Compliance")))
+
+stopifnot(nrow(df.study2) == 278, !anyDuplicated(df.study2$participant),
+          !anyNA(df.study2$condition), all(df.study2$Finished == 1))
+
+```
+
+### Wrangle
+
+```{r study2-wrangle}
+
+# Average answered items within each vignette; give the three vignettes equal weight.
+items.study2 = df.study2 %>%
+  select(participant, condition, matches("^(Sab|De)V[123]_[1-5]$")) %>%
+  pivot_longer(-c(participant, condition),
+               names_to = c("outcome", "vignette", "item"),
+               names_pattern = "(Sab|De)V([123])_([1-5])",
+               values_to = "rating") %>%
+  mutate(outcome = recode(outcome, Sab = "sabotage", De = "deescalation"))
+
+stopifnot(all(is.na(items.study2$rating) | items.study2$rating %in% 1:5))
+
+long.study2 = items.study2 %>%
+  group_by(participant, condition, outcome, vignette) %>%
+  summarise(score = mean(rating, na.rm = TRUE), .groups = "drop") %>%
+  mutate(vignette = factor(vignette))
+
+supplied.study2 = df.study2 %>%
+  select(participant, matches("^(Sab|De)V[123]Avg$")) %>%
+  pivot_longer(-participant,
+               names_to = c("outcome", "vignette"),
+               names_pattern = "(Sab|De)V([123])Avg",
+               values_to = "supplied") %>%
+  mutate(outcome = recode(outcome, Sab = "sabotage", De = "deescalation"),
+         vignette = factor(vignette))
+
+check.study2 = left_join(long.study2, supplied.study2,
+                       by = c("participant", "outcome", "vignette"))
+stopifnot(all(is.finite(check.study2$score)),
+          all(abs(check.study2$score - check.study2$supplied) < 1e-6))
+
+df.study2 = df.study2 %>%
+  left_join(long.study2 %>%
+              select(participant, outcome, vignette, score) %>%
+              pivot_wider(names_from = c(outcome, vignette), values_from = score),
+            by = "participant") %>%
+  mutate(sabotage = (sabotage_1 + sabotage_2 + sabotage_3) / 3,
+         deescalation = (deescalation_1 + deescalation_2 + deescalation_3) / 3)
+
+results$study2 = list(descriptives = df.study2 %>%
+  select(condition, sabotage, deescalation) %>%
+  pivot_longer(-condition, names_to = "outcome") %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n(), mean = mean(value), sd = sd(value)))
+
+```
+
+## STATS
+
+### Linear mixed models
+
+```{r study2-models}
+
+fit.study2.sabotage = lmer(
+  score ~ condition * vignette + (1 | participant),
+  data = filter(long.study2, outcome == "sabotage"))
+
+summary(fit.study2.sabotage)
+
+fit.study2.deescalation = lmer(
+  score ~ condition * vignette + (1 | participant),
+  data = filter(long.study2, outcome == "deescalation"))
+
+summary(fit.study2.deescalation)
+
+```
+
+### Follow up comparisons
+
+```{r study2-comparisons}
+
+means.study2.sabotage = emmeans(fit.study2.sabotage, ~ condition, weights = "equal")
+comparison.study2.sabotage = summary(pairs(means.study2.sabotage), infer = TRUE)
+comparison.study2.sabotage
+
+joint_tests(fit.study2.sabotage, weights = "equal")
+
+means.study2.deescalation = emmeans(fit.study2.deescalation, ~ condition, weights = "equal")
+comparison.study2.deescalation = summary(pairs(means.study2.deescalation), infer = TRUE)
+comparison.study2.deescalation
+
+joint_tests(fit.study2.deescalation, weights = "equal")
+
+primary$study2 = list(contrasts = bind_rows(as_tibble(comparison.study2.sabotage) %>% mutate(outcome = "sabotage"),
+  as_tibble(comparison.study2.deescalation) %>% mutate(outcome = "deescalation")))
+
+primary$study2$tests = bind_rows(as_tibble(joint_tests(fit.study2.sabotage, weights = "equal")) %>% mutate(outcome = "sabotage"),
+  as_tibble(joint_tests(fit.study2.deescalation, weights = "equal")) %>% mutate(outcome = "deescalation"))
+
+```
+
+### Means and confidence intervals
+
+```{r study2-means}
+
+descriptives.study2 = df.study2 %>%
+  select(participant, condition, sabotage, deescalation) %>%
+  pivot_longer(-c(participant, condition), names_to = "outcome", values_to = "score") %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n(), mean = mean(score), sd = sd(score))
+
+show_table(descriptives.study2)
+primary$study2$descriptives = descriptives.study2
+
+plot.means.study2 = descriptives.study2 %>%
+  mutate(se = sd / sqrt(n),
+         lower = mean - qt(.975, n - 1) * se,
+         upper = mean + qt(.975, n - 1) * se) %>%
+  mutate(outcome = factor(outcome, levels = c("sabotage", "deescalation"),
+                          labels = c("Sabotage", "De-escalation")))
+
+show_table(plot.means.study2)
+primary$study2$means = plot.means.study2
+
+```
+
+## PLOTS
+
+```{r study2-plot, fig.width=12, fig.height=5}
+
+plot.data.study2 = df.study2 %>%
+  select(participant, condition, sabotage, deescalation) %>%
+  pivot_longer(-c(participant, condition), names_to = "outcome", values_to = "score") %>%
+  mutate(outcome = factor(outcome, levels = c("sabotage", "deescalation"),
+                          labels = c("Sabotage", "De-escalation")))
+
+plot.counts.study2 = plot.data.study2 %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n_distinct(participant), .groups = "drop")
+
+plot.study2 = ggplot(plot.data.study2, aes(condition, score, color = condition)) +
+  geom_point(position = position_jitter(width = .16, height = 0, seed = 1),
+             alpha = .18, size = 1.5) +
+  geom_errorbar(data = plot.means.study2,
+                aes(y = mean, ymin = lower, ymax = upper),
+                width = .10, linewidth = .8, color = "black") +
+  geom_point(data = plot.means.study2, aes(y = mean),
+             shape = 21, fill = "white", color = "black", size = 4, stroke = 1) +
+  geom_text(data = plot.counts.study2,
+            aes(y = .35, label = paste0("n=", n)),
+            color = "#333333", size = 4.3) +
+  facet_wrap(~ outcome, nrow = 1) +
+  scale_color_manual(values = condition_colors, guide = "none") +
+  scale_y_continuous(breaks = 1:5) +
+  coord_cartesian(ylim = c(1, 5), clip = "off") +
+  labs(x = NULL, y = "Reported willingness\nto perform the behavior\n(1 = low; 5 = high)") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 18),
+        axis.title.y = element_text(size = 18, lineheight = .95),
+        axis.text = element_text(size = 16),
+        panel.spacing = unit(1, "cm"),
+        plot.margin = margin(5.5, 5.5, 25, 5.5))
+
+plot.study2
+
+ggsave("../../figures/main/study2/study2.pdf", plot.study2,
+       width = 12, height = 5, bg = "white")
+ggsave("../../figures/main/study2/study2.png", plot.study2,
+       width = 12, height = 5, dpi = 600, bg = "white")
+
+```
+
+# STUDY 3A
+
+## DATA
+
+### Read in data
+
+```{r study3a-read}
+
+raw.study3a = read_csv("../../data/main/study3/a/study3a.csv") %>%
+  rename_with(str_trim)
+
+df.study3a = raw.study3a %>%
+  filter(Exclusion == 0) %>%
+  mutate(participant = factor(ResponseId),
+         condition = factor(Condition, levels = c(1, 2),
+                            labels = c("Agency", "Compliance")))
+
+stopifnot(nrow(df.study3a) == 274, !anyDuplicated(df.study3a$participant),
+          !anyNA(df.study3a$condition), all(df.study3a$Finished == 1))
+
+```
+
+### Wrangle
+
+```{r study3a-wrangle}
+
+# Average answered items within each vignette; give the three vignettes equal weight.
+items.study3a = df.study3a %>%
+  select(participant, condition, matches("^(Sab|De)V[123]_[1-5]$")) %>%
+  pivot_longer(-c(participant, condition),
+               names_to = c("outcome", "vignette", "item"),
+               names_pattern = "(Sab|De)V([123])_([1-5])",
+               values_to = "rating") %>%
+  mutate(outcome = recode(outcome, Sab = "sabotage", De = "deescalation"))
+
+stopifnot(all(is.na(items.study3a$rating) | items.study3a$rating %in% 1:5))
+
+long.study3a = items.study3a %>%
+  group_by(participant, condition, outcome, vignette) %>%
+  summarise(score = mean(rating, na.rm = TRUE), .groups = "drop") %>%
+  mutate(vignette = factor(vignette))
+
+supplied.study3a = df.study3a %>%
+  select(participant, matches("^(Sab|De)V[123]Avg$")) %>%
+  pivot_longer(-participant,
+               names_to = c("outcome", "vignette"),
+               names_pattern = "(Sab|De)V([123])Avg",
+               values_to = "supplied") %>%
+  mutate(outcome = recode(outcome, Sab = "sabotage", De = "deescalation"),
+         vignette = factor(vignette))
+
+check.study3a = left_join(long.study3a, supplied.study3a,
+                       by = c("participant", "outcome", "vignette"))
+stopifnot(all(is.finite(check.study3a$score)),
+          all(abs(check.study3a$score - check.study3a$supplied) < 1e-6))
+
+df.study3a = df.study3a %>%
+  left_join(long.study3a %>%
+              select(participant, outcome, vignette, score) %>%
+              pivot_wider(names_from = c(outcome, vignette), values_from = score),
+            by = "participant") %>%
+  mutate(sabotage = (sabotage_1 + sabotage_2 + sabotage_3) / 3,
+         deescalation = (deescalation_1 + deescalation_2 + deescalation_3) / 3)
+
+results$study3a = list(descriptives = df.study3a %>%
+  select(condition, sabotage, deescalation) %>%
+  pivot_longer(-condition, names_to = "outcome") %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n(), mean = mean(value), sd = sd(value)))
+
+```
+
+## STATS
+
+### Linear mixed models
+
+```{r study3a-models}
+
+fit.study3a.sabotage = lmer(
+  score ~ condition * vignette + (1 | participant),
+  data = filter(long.study3a, outcome == "sabotage"))
+
+summary(fit.study3a.sabotage)
+
+fit.study3a.deescalation = lmer(
+  score ~ condition * vignette + (1 | participant),
+  data = filter(long.study3a, outcome == "deescalation"))
+
+summary(fit.study3a.deescalation)
+
+```
+
+### Follow up comparisons
+
+```{r study3a-comparisons}
+
+means.study3a.sabotage = emmeans(fit.study3a.sabotage, ~ condition, weights = "equal")
+comparison.study3a.sabotage = summary(pairs(means.study3a.sabotage), infer = TRUE)
+comparison.study3a.sabotage
+
+joint_tests(fit.study3a.sabotage, weights = "equal")
+
+means.study3a.deescalation = emmeans(fit.study3a.deescalation, ~ condition, weights = "equal")
+comparison.study3a.deescalation = summary(pairs(means.study3a.deescalation), infer = TRUE)
+comparison.study3a.deescalation
+
+joint_tests(fit.study3a.deescalation, weights = "equal")
+
+primary$study3a = list(contrasts = bind_rows(as_tibble(comparison.study3a.sabotage) %>% mutate(outcome = "sabotage"),
+  as_tibble(comparison.study3a.deescalation) %>% mutate(outcome = "deescalation")))
+
+primary$study3a$tests = bind_rows(as_tibble(joint_tests(fit.study3a.sabotage, weights = "equal")) %>% mutate(outcome = "sabotage"),
+  as_tibble(joint_tests(fit.study3a.deescalation, weights = "equal")) %>% mutate(outcome = "deescalation"))
+
+```
+
+### Means and confidence intervals
+
+```{r study3a-means}
+
+descriptives.study3a = df.study3a %>%
+  select(participant, condition, sabotage, deescalation) %>%
+  pivot_longer(-c(participant, condition), names_to = "outcome", values_to = "score") %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n(), mean = mean(score), sd = sd(score))
+
+show_table(descriptives.study3a)
+primary$study3a$descriptives = descriptives.study3a
+
+plot.means.study3a = descriptives.study3a %>%
+  mutate(se = sd / sqrt(n),
+         lower = mean - qt(.975, n - 1) * se,
+         upper = mean + qt(.975, n - 1) * se) %>%
+  mutate(outcome = factor(outcome, levels = c("sabotage", "deescalation"),
+                          labels = c("Sabotage", "De-escalation")))
+
+show_table(plot.means.study3a)
+primary$study3a$means = plot.means.study3a
+
+```
+
+### Mediation
+
+```{r study3a-mediation}
+
+df = df.study3a
+
+mediation_results = list()
+for (outcome_name in c("sabotage", "deescalation")) {
+  prefix = ifelse(outcome_name == "sabotage", "Sab", "De")
+  reason = ifelse(outcome_name == "sabotage", "Des", "Obl")
+  m = rowMeans(df[paste0(prefix, "V", 1:3, "_", reason)])
+  stopifnot(all(abs(m - df[[paste0(prefix, reason, "Avg")]]) < 1e-6))
+  items = unlist(lapply(1:3, function(v) paste0(prefix, "V", v, "_", 1:5)))
+  y = rowMeans(df[items], na.rm = TRUE)
+  stopifnot(all(abs(y - df[[paste0(prefix, "Avg")]]) < 1e-6))
+  d = data.frame(y = y, m = m, agency = as.numeric(df$condition == "Agency"))
+  stopifnot(!anyNA(d))
+  fit_m = lm(m ~ agency, data = d)
+  fit_y = lm(y ~ agency + m, data = d)
+
+
+  # Resample participants; all computations remain in this Rmd.
+  statistic = function(data, index) {
+    b = data[index, ]
+    a = lm.fit(cbind(1, b$agency), b$m)$coefficients[2]
+    by = lm.fit(cbind(1, b$agency, b$m), b$y)$coefficients
+    c(indirect = unname(a * by[3]), direct = unname(by[2]),
+      total = unname(by[2] + a * by[3]))
+  }
+  set.seed(20260906)
+  bootstrap = boot(d, statistic = statistic, R = 5000)
+  stopifnot(all(is.finite(bootstrap$t)))
+  intervals = apply(bootstrap$t, 2, quantile, probs = c(.025, .975))
+  mediation_results[[outcome_name]] = tibble(
+    outcome = outcome_name, mediator = ifelse(reason == "Des", "deservingness", "obligation"),
+    effect = c("indirect", "direct", "total"),
+    estimate = bootstrap$t0, lower = intervals[1, ], upper = intervals[2, ])
+}
+mediation_results = bind_rows(mediation_results)
+
+results$study3a$mediation = mediation_results
+
+show_table(mediation_results)
+
+```
+
+## PLOTS
+
+```{r study3a-plot, fig.width=12, fig.height=5}
+
+plot.data.study3a = df.study3a %>%
+  select(participant, condition, sabotage, deescalation) %>%
+  pivot_longer(-c(participant, condition), names_to = "outcome", values_to = "score") %>%
+  mutate(outcome = factor(outcome, levels = c("sabotage", "deescalation"),
+                          labels = c("Sabotage", "De-escalation")))
+
+plot.counts.study3a = plot.data.study3a %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n_distinct(participant), .groups = "drop")
+
+plot.study3a = ggplot(plot.data.study3a, aes(condition, score, color = condition)) +
+  geom_point(position = position_jitter(width = .16, height = 0, seed = 1),
+             alpha = .18, size = 1.5) +
+  geom_errorbar(data = plot.means.study3a,
+                aes(y = mean, ymin = lower, ymax = upper),
+                width = .10, linewidth = .8, color = "black") +
+  geom_point(data = plot.means.study3a, aes(y = mean),
+             shape = 21, fill = "white", color = "black", size = 4, stroke = 1) +
+  geom_text(data = plot.counts.study3a,
+            aes(y = .35, label = paste0("n=", n)),
+            color = "#333333", size = 4.3) +
+  facet_wrap(~ outcome, nrow = 1) +
+  scale_color_manual(values = condition_colors, guide = "none") +
+  scale_y_continuous(breaks = 1:5) +
+  coord_cartesian(ylim = c(1, 5), clip = "off") +
+  labs(x = NULL, y = "Reported willingness\nto perform the behavior\n(1 = low; 5 = high)") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 18),
+        axis.title.y = element_text(size = 18, lineheight = .95),
+        axis.text = element_text(size = 16),
+        panel.spacing = unit(1, "cm"),
+        plot.margin = margin(5.5, 5.5, 25, 5.5))
+
+plot.study3a
+
+ggsave("../../figures/main/study3/a/study3a.pdf", plot.study3a,
+       width = 12, height = 5, bg = "white")
+ggsave("../../figures/main/study3/a/study3a.png", plot.study3a,
+       width = 12, height = 5, dpi = 600, bg = "white")
+
+```
+
+# STUDY 3B
+
+## DATA
+
+### Read in data
+
+```{r study3b-read}
+
+raw.study3b = read_csv("../../data/main/study3/b/study3b.csv") %>%
+  rename_with(str_trim)
+
+df.study3b = raw.study3b %>%
+  filter(Exclusion == 0) %>%
+  mutate(participant = factor(ResponseId),
+         condition = factor(Condition, levels = c(1, 2),
+                            labels = c("Agency", "Compliance")))
+
+stopifnot(nrow(df.study3b) == 259, !anyDuplicated(df.study3b$participant),
+          !anyNA(df.study3b$condition), all(df.study3b$Finished == 1))
+stopifnot(all(df.study3b$FullTime == 1), all(df.study3b$CustomerFacing == 1))
+
+```
+
+### Wrangle
+
+```{r study3b-wrangle}
+
+# Average answered items within each vignette; give the three vignettes equal weight.
+items.study3b = df.study3b %>%
+  select(participant, condition, matches("^(Sab|De)V[123]_[1-5]$")) %>%
+  pivot_longer(-c(participant, condition),
+               names_to = c("outcome", "vignette", "item"),
+               names_pattern = "(Sab|De)V([123])_([1-5])",
+               values_to = "rating") %>%
+  mutate(outcome = recode(outcome, Sab = "sabotage", De = "deescalation"))
+
+stopifnot(all(is.na(items.study3b$rating) | items.study3b$rating %in% 1:5))
+
+long.study3b = items.study3b %>%
+  group_by(participant, condition, outcome, vignette) %>%
+  summarise(score = mean(rating, na.rm = TRUE), .groups = "drop") %>%
+  mutate(vignette = factor(vignette))
+
+supplied.study3b = df.study3b %>%
+  select(participant, matches("^(Sab|De)V[123]Avg$")) %>%
+  pivot_longer(-participant,
+               names_to = c("outcome", "vignette"),
+               names_pattern = "(Sab|De)V([123])Avg",
+               values_to = "supplied") %>%
+  mutate(outcome = recode(outcome, Sab = "sabotage", De = "deescalation"),
+         vignette = factor(vignette))
+
+check.study3b = left_join(long.study3b, supplied.study3b,
+                       by = c("participant", "outcome", "vignette"))
+stopifnot(all(is.finite(check.study3b$score)),
+          all(abs(check.study3b$score - check.study3b$supplied) < 1e-6))
+
+df.study3b = df.study3b %>%
+  left_join(long.study3b %>%
+              select(participant, outcome, vignette, score) %>%
+              pivot_wider(names_from = c(outcome, vignette), values_from = score),
+            by = "participant") %>%
+  mutate(sabotage = (sabotage_1 + sabotage_2 + sabotage_3) / 3,
+         deescalation = (deescalation_1 + deescalation_2 + deescalation_3) / 3)
+
+results$study3b = list(descriptives = df.study3b %>%
+  select(condition, sabotage, deescalation) %>%
+  pivot_longer(-condition, names_to = "outcome") %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n(), mean = mean(value), sd = sd(value)))
+
+```
+
+## STATS
+
+### Linear mixed models
+
+```{r study3b-models}
+
+fit.study3b.sabotage = lmer(
+  score ~ condition * vignette + (1 | participant),
+  data = filter(long.study3b, outcome == "sabotage"))
+
+summary(fit.study3b.sabotage)
+
+fit.study3b.deescalation = lmer(
+  score ~ condition * vignette + (1 | participant),
+  data = filter(long.study3b, outcome == "deescalation"))
+
+summary(fit.study3b.deescalation)
+
+```
+
+### Follow up comparisons
+
+```{r study3b-comparisons}
+
+means.study3b.sabotage = emmeans(fit.study3b.sabotage, ~ condition, weights = "equal")
+comparison.study3b.sabotage = summary(pairs(means.study3b.sabotage), infer = TRUE)
+comparison.study3b.sabotage
+
+joint_tests(fit.study3b.sabotage, weights = "equal")
+
+means.study3b.deescalation = emmeans(fit.study3b.deescalation, ~ condition, weights = "equal")
+comparison.study3b.deescalation = summary(pairs(means.study3b.deescalation), infer = TRUE)
+comparison.study3b.deescalation
+
+joint_tests(fit.study3b.deescalation, weights = "equal")
+
+primary$study3b = list(contrasts = bind_rows(as_tibble(comparison.study3b.sabotage) %>% mutate(outcome = "sabotage"),
+  as_tibble(comparison.study3b.deescalation) %>% mutate(outcome = "deescalation")))
+
+primary$study3b$tests = bind_rows(as_tibble(joint_tests(fit.study3b.sabotage, weights = "equal")) %>% mutate(outcome = "sabotage"),
+  as_tibble(joint_tests(fit.study3b.deescalation, weights = "equal")) %>% mutate(outcome = "deescalation"))
+
+```
+
+### Means and confidence intervals
+
+```{r study3b-means}
+
+descriptives.study3b = df.study3b %>%
+  select(participant, condition, sabotage, deescalation) %>%
+  pivot_longer(-c(participant, condition), names_to = "outcome", values_to = "score") %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n(), mean = mean(score), sd = sd(score))
+
+show_table(descriptives.study3b)
+primary$study3b$descriptives = descriptives.study3b
+
+plot.means.study3b = descriptives.study3b %>%
+  mutate(se = sd / sqrt(n),
+         lower = mean - qt(.975, n - 1) * se,
+         upper = mean + qt(.975, n - 1) * se) %>%
+  mutate(outcome = factor(outcome, levels = c("sabotage", "deescalation"),
+                          labels = c("Sabotage", "De-escalation")))
+
+show_table(plot.means.study3b)
+primary$study3b$means = plot.means.study3b
+
+```
+
+### Mediation
+
+```{r study3b-mediation}
+
+df = df.study3b
+
+mediation_results = list()
+for (outcome_name in c("sabotage", "deescalation")) {
+  prefix = ifelse(outcome_name == "sabotage", "Sab", "De")
+  reason = ifelse(outcome_name == "sabotage", "Des", "Obl")
+  m = rowMeans(df[paste0(prefix, "V", 1:3, "_", reason)])
+  stopifnot(all(abs(m - df[[paste0(prefix, reason, "Avg")]]) < 1e-6))
+  items = unlist(lapply(1:3, function(v) paste0(prefix, "V", v, "_", 1:5)))
+  y = rowMeans(df[items], na.rm = TRUE)
+  stopifnot(all(abs(y - df[[paste0(prefix, "Avg")]]) < 1e-6))
+  d = data.frame(y = y, m = m, agency = as.numeric(df$condition == "Agency"))
+  stopifnot(!anyNA(d))
+  fit_m = lm(m ~ agency, data = d)
+  fit_y = lm(y ~ agency + m, data = d)
+
+
+  # Resample participants; all computations remain in this Rmd.
+  statistic = function(data, index) {
+    b = data[index, ]
+    a = lm.fit(cbind(1, b$agency), b$m)$coefficients[2]
+    by = lm.fit(cbind(1, b$agency, b$m), b$y)$coefficients
+    c(indirect = unname(a * by[3]), direct = unname(by[2]),
+      total = unname(by[2] + a * by[3]))
+  }
+  set.seed(20260906)
+  bootstrap = boot(d, statistic = statistic, R = 5000)
+  stopifnot(all(is.finite(bootstrap$t)))
+  intervals = apply(bootstrap$t, 2, quantile, probs = c(.025, .975))
+  mediation_results[[outcome_name]] = tibble(
+    outcome = outcome_name, mediator = ifelse(reason == "Des", "deservingness", "obligation"),
+    effect = c("indirect", "direct", "total"),
+    estimate = bootstrap$t0, lower = intervals[1, ], upper = intervals[2, ])
+}
+mediation_results = bind_rows(mediation_results)
+
+results$study3b$mediation = mediation_results
+
+show_table(mediation_results)
+
+```
+
+## PLOTS
+
+```{r study3b-plot, fig.width=12, fig.height=5}
+
+plot.data.study3b = df.study3b %>%
+  select(participant, condition, sabotage, deescalation) %>%
+  pivot_longer(-c(participant, condition), names_to = "outcome", values_to = "score") %>%
+  mutate(outcome = factor(outcome, levels = c("sabotage", "deescalation"),
+                          labels = c("Sabotage", "De-escalation")))
+
+plot.counts.study3b = plot.data.study3b %>%
+  group_by(outcome, condition) %>%
+  summarise(n = n_distinct(participant), .groups = "drop")
+
+plot.study3b = ggplot(plot.data.study3b, aes(condition, score, color = condition)) +
+  geom_point(position = position_jitter(width = .16, height = 0, seed = 1),
+             alpha = .18, size = 1.5) +
+  geom_errorbar(data = plot.means.study3b,
+                aes(y = mean, ymin = lower, ymax = upper),
+                width = .10, linewidth = .8, color = "black") +
+  geom_point(data = plot.means.study3b, aes(y = mean),
+             shape = 21, fill = "white", color = "black", size = 4, stroke = 1) +
+  geom_text(data = plot.counts.study3b,
+            aes(y = .35, label = paste0("n=", n)),
+            color = "#333333", size = 4.3) +
+  facet_wrap(~ outcome, nrow = 1) +
+  scale_color_manual(values = condition_colors, guide = "none") +
+  scale_y_continuous(breaks = 1:5) +
+  coord_cartesian(ylim = c(1, 5), clip = "off") +
+  labs(x = NULL, y = "Reported willingness\nto perform the behavior\n(1 = low; 5 = high)") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 18),
+        axis.title.y = element_text(size = 18, lineheight = .95),
+        axis.text = element_text(size = 16),
+        panel.spacing = unit(1, "cm"),
+        plot.margin = margin(5.5, 5.5, 25, 5.5))
+
+plot.study3b
+
+ggsave("../../figures/main/study3/b/study3b.pdf", plot.study3b,
+       width = 12, height = 5, bg = "white")
+ggsave("../../figures/main/study3/b/study3b.png", plot.study3b,
+       width = 12, height = 5, dpi = 600, bg = "white")
+
+```
+
+# APPENDIX
+
+## PREREGISTERED MAIN STUDY ANALYSES
+
+### Study 1
+
+```{r study1-registered}
+
+fit.study1.registered = lm(total_sabotage ~ condition, data = df.study1)
+anova(fit.study1.registered)
+results$study1$anova = as.data.frame(anova(fit.study1.registered))
+
+```
+
+### Study 2
+
+```{r study2-registered-data}
+
+df = df.study2
+long = long.study2
+
+```
+
+#### Registered condition models
+
+```{r study2-registered-models}
+
+fit_sabotage = lmer(score ~ condition + (1 | participant) + (1 | vignette),
+                      data = filter(long, outcome == "sabotage"))
+fit_deescalation = lmer(score ~ condition + (1 | participant) + (1 | vignette),
+                          data = filter(long, outcome == "deescalation"))
+contrasts = bind_rows(
+  as.data.frame(summary(pairs(emmeans(fit_sabotage, ~ condition)), infer = c(TRUE, TRUE))) %>%
+    mutate(outcome = "sabotage"),
+  as.data.frame(summary(pairs(emmeans(fit_deescalation, ~ condition)), infer = c(TRUE, TRUE))) %>%
+    mutate(outcome = "deescalation"))
+
+checks = tibble(outcome = c("sabotage", "deescalation"),
+               singular = c(isSingular(fit_sabotage), isSingular(fit_deescalation)),
+               vignette_variance = c(as.data.frame(VarCorr(fit_sabotage))$vcov[
+                 as.data.frame(VarCorr(fit_sabotage))$grp == "vignette"],
+                 as.data.frame(VarCorr(fit_deescalation))$vcov[
+                 as.data.frame(VarCorr(fit_deescalation))$grp == "vignette"]))
+
+checks$optimizer_code = c(fit_sabotage@optinfo$conv$opt,
+                          fit_deescalation@optinfo$conv$opt)
+checks$diagnostic = vapply(list(fit_sabotage, fit_deescalation), function(model) {
+  messages = model@optinfo$conv$lme4$messages
+  if (is.null(messages)) "None" else paste(messages, collapse = "; ")
+}, character(1))
+stopifnot(all(checks$optimizer_code == 0))
+show_table(checks)
+
+results$study2$contrasts = contrasts
+results$study2$model_checks = checks
+
+show_table(contrasts)
+
+```
+
+#### Registered condition by vignette ANOVAs
+
+```{r study2-registered-anova}
+
+# Greenhouse-Geisser correction is an implementation choice.
+anova_results = list()
+for (outcome_name in c("sabotage", "deescalation")) {
+  d = filter(long, outcome == outcome_name)
+  contrasts(d$condition) = contr.sum(2)
+  contrasts(d$vignette) = contr.sum(3)
+  fit_aov = aov(score ~ condition * vignette + Error(participant / vignette), data = d)
+  a = summary(fit_aov)
+  wide = df[paste0(outcome_name, "_", 1:3)]
+  residual_matrix = residuals(lm(as.matrix(wide) ~ df$condition))
+  covariance = crossprod(residual_matrix) / (nrow(df) - 2)
+  center = diag(3) - matrix(1 / 3, 3, 3)
+  sc = center %*% covariance %*% center
+  epsilon = sum(diag(sc))^2 / (2 * sum(sc^2))
+  between = as.data.frame(a[["Error: participant"]][[1]])
+  within = as.data.frame(a[["Error: participant:vignette"]][[1]])
+  tab = tibble(outcome = outcome_name,
+               term = c("condition", "vignette", "condition:vignette"),
+               df1 = c(between$Df[1], within$Df[1:2]),
+               df2 = c(between$Df[2], rep(tail(within$Df, 1), 2)),
+               F = c(between$`F value`[1], within$`F value`[1:2]),
+               epsilon = c(1, epsilon, epsilon)) %>%
+    mutate(df1_GG = df1 * epsilon, df2_GG = df2 * epsilon,
+           p_GG = pf(F, df1_GG, df2_GG, lower.tail = FALSE))
+  anova_results[[outcome_name]] = tab
+}
+anova_results = bind_rows(anova_results)
+
+results$study2$anova = anova_results
+
+show_table(anova_results)
+
+```
+
+#### Reduced random effects sensitivity
+
+```{r study2-reduced}
+
+reduced_results = list()
+variance_checks = list()
+for (measure in c("sabotage", "deescalation")) {
+  original = if (measure == "sabotage") fit_sabotage else fit_deescalation
+  vc = as.data.frame(VarCorr(original))
+  vc$outcome = measure
+  variance_checks[[measure]] = vc
+  stopifnot(original@optinfo$conv$opt == 0)
+  if (isSingular(original)) {
+    stopifnot(vc$vcov[vc$grp == "vignette"] < 1e-6)
+    reduced = lmer(score ~ condition + (1 | participant), data = filter(long, outcome == measure))
+    stopifnot(!isSingular(reduced), is.null(reduced@optinfo$conv$lme4$messages))
+    comparison = as.data.frame(summary(pairs(emmeans(reduced, ~ condition)), infer = TRUE))
+    comparison$outcome = measure
+    comparison$participant_variance = as.data.frame(VarCorr(reduced))$vcov[1]
+    comparison$residual_variance = sigma(reduced)^2
+    comparison$singular = isSingular(reduced)
+    comparison$optimizer_ok = is.null(reduced@optinfo$conv$lme4$messages)
+    comparison$original_estimate = filter(contrasts, outcome == measure)$estimate
+    comparison$estimate_change = comparison$estimate - comparison$original_estimate
+    comparison$original_SE = filter(contrasts, outcome == measure)$SE
+    comparison$original_df = filter(contrasts, outcome == measure)$df
+    comparison$original_p = filter(contrasts, outcome == measure)$p.value
+    comparison$SE_change = comparison$SE - comparison$original_SE
+    comparison$df_change = comparison$df - comparison$original_df
+    comparison$p_change = comparison$p.value - comparison$original_p
+    reduced_results[[measure]] = comparison
+  }
+}
+results$study2$registered_variances = bind_rows(variance_checks)
+results$study2$reduced = bind_rows(reduced_results)
+show_table(select(results$study2$registered_variances, outcome, grp, vcov))
+
+```
+
+### Study 3a
+
+```{r study3a-registered-data}
+
+df = df.study3a
+long = long.study3a
+
+```
+
+#### Registered condition models
+
+```{r study3a-registered-models}
+
+fit_sabotage = lmer(score ~ condition + (1 | participant) + (1 | vignette),
+                      data = filter(long, outcome == "sabotage"))
+fit_deescalation = lmer(score ~ condition + (1 | participant) + (1 | vignette),
+                          data = filter(long, outcome == "deescalation"))
+contrasts = bind_rows(
+  as.data.frame(summary(pairs(emmeans(fit_sabotage, ~ condition)), infer = c(TRUE, TRUE))) %>%
+    mutate(outcome = "sabotage"),
+  as.data.frame(summary(pairs(emmeans(fit_deescalation, ~ condition)), infer = c(TRUE, TRUE))) %>%
+    mutate(outcome = "deescalation"))
+
+checks = tibble(outcome = c("sabotage", "deescalation"),
+               singular = c(isSingular(fit_sabotage), isSingular(fit_deescalation)),
+               vignette_variance = c(as.data.frame(VarCorr(fit_sabotage))$vcov[
+                 as.data.frame(VarCorr(fit_sabotage))$grp == "vignette"],
+                 as.data.frame(VarCorr(fit_deescalation))$vcov[
+                 as.data.frame(VarCorr(fit_deescalation))$grp == "vignette"]))
+
+checks$optimizer_code = c(fit_sabotage@optinfo$conv$opt,
+                          fit_deescalation@optinfo$conv$opt)
+checks$diagnostic = vapply(list(fit_sabotage, fit_deescalation), function(model) {
+  messages = model@optinfo$conv$lme4$messages
+  if (is.null(messages)) "None" else paste(messages, collapse = "; ")
+}, character(1))
+stopifnot(all(checks$optimizer_code == 0))
+show_table(checks)
+
+results$study3a$contrasts = contrasts
+results$study3a$model_checks = checks
+
+show_table(contrasts)
+
+```
+
+#### Registered condition by vignette ANOVAs
+
+```{r study3a-registered-anova}
+
+# Greenhouse-Geisser correction is an implementation choice.
+anova_results = list()
+for (outcome_name in c("sabotage", "deescalation")) {
+  d = filter(long, outcome == outcome_name)
+  contrasts(d$condition) = contr.sum(2)
+  contrasts(d$vignette) = contr.sum(3)
+  fit_aov = aov(score ~ condition * vignette + Error(participant / vignette), data = d)
+  a = summary(fit_aov)
+  wide = df[paste0(outcome_name, "_", 1:3)]
+  residual_matrix = residuals(lm(as.matrix(wide) ~ df$condition))
+  covariance = crossprod(residual_matrix) / (nrow(df) - 2)
+  center = diag(3) - matrix(1 / 3, 3, 3)
+  sc = center %*% covariance %*% center
+  epsilon = sum(diag(sc))^2 / (2 * sum(sc^2))
+  between = as.data.frame(a[["Error: participant"]][[1]])
+  within = as.data.frame(a[["Error: participant:vignette"]][[1]])
+  tab = tibble(outcome = outcome_name,
+               term = c("condition", "vignette", "condition:vignette"),
+               df1 = c(between$Df[1], within$Df[1:2]),
+               df2 = c(between$Df[2], rep(tail(within$Df, 1), 2)),
+               F = c(between$`F value`[1], within$`F value`[1:2]),
+               epsilon = c(1, epsilon, epsilon)) %>%
+    mutate(df1_GG = df1 * epsilon, df2_GG = df2 * epsilon,
+           p_GG = pf(F, df1_GG, df2_GG, lower.tail = FALSE))
+  anova_results[[outcome_name]] = tab
+}
+anova_results = bind_rows(anova_results)
+
+results$study3a$anova = anova_results
+
+show_table(anova_results)
+
+```
+
+#### Reduced random effects sensitivity
+
+```{r study3a-reduced}
+
+reduced_results = list()
+variance_checks = list()
+for (measure in c("sabotage", "deescalation")) {
+  original = if (measure == "sabotage") fit_sabotage else fit_deescalation
+  vc = as.data.frame(VarCorr(original))
+  vc$outcome = measure
+  variance_checks[[measure]] = vc
+  stopifnot(original@optinfo$conv$opt == 0)
+  if (isSingular(original)) {
+    stopifnot(vc$vcov[vc$grp == "vignette"] < 1e-6)
+    reduced = lmer(score ~ condition + (1 | participant), data = filter(long, outcome == measure))
+    stopifnot(!isSingular(reduced), is.null(reduced@optinfo$conv$lme4$messages))
+    comparison = as.data.frame(summary(pairs(emmeans(reduced, ~ condition)), infer = TRUE))
+    comparison$outcome = measure
+    comparison$participant_variance = as.data.frame(VarCorr(reduced))$vcov[1]
+    comparison$residual_variance = sigma(reduced)^2
+    comparison$singular = isSingular(reduced)
+    comparison$optimizer_ok = is.null(reduced@optinfo$conv$lme4$messages)
+    comparison$original_estimate = filter(contrasts, outcome == measure)$estimate
+    comparison$estimate_change = comparison$estimate - comparison$original_estimate
+    comparison$original_SE = filter(contrasts, outcome == measure)$SE
+    comparison$original_df = filter(contrasts, outcome == measure)$df
+    comparison$original_p = filter(contrasts, outcome == measure)$p.value
+    comparison$SE_change = comparison$SE - comparison$original_SE
+    comparison$df_change = comparison$df - comparison$original_df
+    comparison$p_change = comparison$p.value - comparison$original_p
+    reduced_results[[measure]] = comparison
+  }
+}
+results$study3a$registered_variances = bind_rows(variance_checks)
+results$study3a$reduced = bind_rows(reduced_results)
+show_table(select(results$study3a$registered_variances, outcome, grp, vcov))
+show_table(transmute(results$study3a$reduced, Measure = outcome,
+                     `Participant variance` = participant_variance,
+                     `Residual variance` = residual_variance,
+                     Singular = singular, `Optimizer OK` = optimizer_ok))
+
+```
+
+### Study 3b
+
+```{r study3b-registered-data}
+
+df = df.study3b
+long = long.study3b
+
+```
+
+#### Registered condition models
+
+```{r study3b-registered-models}
+
+fit_sabotage = lmer(score ~ condition + (1 | participant) + (1 | vignette),
+                      data = filter(long, outcome == "sabotage"))
+fit_deescalation = lmer(score ~ condition + (1 | participant) + (1 | vignette),
+                          data = filter(long, outcome == "deescalation"))
+contrasts = bind_rows(
+  as.data.frame(summary(pairs(emmeans(fit_sabotage, ~ condition)), infer = c(TRUE, TRUE))) %>%
+    mutate(outcome = "sabotage"),
+  as.data.frame(summary(pairs(emmeans(fit_deescalation, ~ condition)), infer = c(TRUE, TRUE))) %>%
+    mutate(outcome = "deescalation"))
+
+checks = tibble(outcome = c("sabotage", "deescalation"),
+               singular = c(isSingular(fit_sabotage), isSingular(fit_deescalation)),
+               vignette_variance = c(as.data.frame(VarCorr(fit_sabotage))$vcov[
+                 as.data.frame(VarCorr(fit_sabotage))$grp == "vignette"],
+                 as.data.frame(VarCorr(fit_deescalation))$vcov[
+                 as.data.frame(VarCorr(fit_deescalation))$grp == "vignette"]))
+
+checks$optimizer_code = c(fit_sabotage@optinfo$conv$opt,
+                          fit_deescalation@optinfo$conv$opt)
+checks$diagnostic = vapply(list(fit_sabotage, fit_deescalation), function(model) {
+  messages = model@optinfo$conv$lme4$messages
+  if (is.null(messages)) "None" else paste(messages, collapse = "; ")
+}, character(1))
+stopifnot(all(checks$optimizer_code == 0))
+show_table(checks)
+
+results$study3b$contrasts = contrasts
+results$study3b$model_checks = checks
+
+show_table(contrasts)
+
+```
+
+#### Registered condition by vignette ANOVAs
+
+```{r study3b-registered-anova}
+
+# Greenhouse-Geisser correction is an implementation choice.
+anova_results = list()
+for (outcome_name in c("sabotage", "deescalation")) {
+  d = filter(long, outcome == outcome_name)
+  contrasts(d$condition) = contr.sum(2)
+  contrasts(d$vignette) = contr.sum(3)
+  fit_aov = aov(score ~ condition * vignette + Error(participant / vignette), data = d)
+  a = summary(fit_aov)
+  wide = df[paste0(outcome_name, "_", 1:3)]
+  residual_matrix = residuals(lm(as.matrix(wide) ~ df$condition))
+  covariance = crossprod(residual_matrix) / (nrow(df) - 2)
+  center = diag(3) - matrix(1 / 3, 3, 3)
+  sc = center %*% covariance %*% center
+  epsilon = sum(diag(sc))^2 / (2 * sum(sc^2))
+  between = as.data.frame(a[["Error: participant"]][[1]])
+  within = as.data.frame(a[["Error: participant:vignette"]][[1]])
+  tab = tibble(outcome = outcome_name,
+               term = c("condition", "vignette", "condition:vignette"),
+               df1 = c(between$Df[1], within$Df[1:2]),
+               df2 = c(between$Df[2], rep(tail(within$Df, 1), 2)),
+               F = c(between$`F value`[1], within$`F value`[1:2]),
+               epsilon = c(1, epsilon, epsilon)) %>%
+    mutate(df1_GG = df1 * epsilon, df2_GG = df2 * epsilon,
+           p_GG = pf(F, df1_GG, df2_GG, lower.tail = FALSE))
+  anova_results[[outcome_name]] = tab
+}
+anova_results = bind_rows(anova_results)
+
+results$study3b$anova = anova_results
+
+show_table(anova_results)
+
+```
+
+#### Reduced random effects sensitivity
+
+```{r study3b-reduced}
+
+reduced_results = list()
+variance_checks = list()
+for (measure in c("sabotage", "deescalation")) {
+  original = if (measure == "sabotage") fit_sabotage else fit_deescalation
+  vc = as.data.frame(VarCorr(original))
+  vc$outcome = measure
+  variance_checks[[measure]] = vc
+  stopifnot(original@optinfo$conv$opt == 0)
+  if (isSingular(original)) {
+    stopifnot(vc$vcov[vc$grp == "vignette"] < 1e-6)
+    reduced = lmer(score ~ condition + (1 | participant), data = filter(long, outcome == measure))
+    stopifnot(!isSingular(reduced), is.null(reduced@optinfo$conv$lme4$messages))
+    comparison = as.data.frame(summary(pairs(emmeans(reduced, ~ condition)), infer = TRUE))
+    comparison$outcome = measure
+    comparison$participant_variance = as.data.frame(VarCorr(reduced))$vcov[1]
+    comparison$residual_variance = sigma(reduced)^2
+    comparison$singular = isSingular(reduced)
+    comparison$optimizer_ok = is.null(reduced@optinfo$conv$lme4$messages)
+    comparison$original_estimate = filter(contrasts, outcome == measure)$estimate
+    comparison$estimate_change = comparison$estimate - comparison$original_estimate
+    comparison$original_SE = filter(contrasts, outcome == measure)$SE
+    comparison$original_df = filter(contrasts, outcome == measure)$df
+    comparison$original_p = filter(contrasts, outcome == measure)$p.value
+    comparison$SE_change = comparison$SE - comparison$original_SE
+    comparison$df_change = comparison$df - comparison$original_df
+    comparison$p_change = comparison$p.value - comparison$original_p
+    reduced_results[[measure]] = comparison
+  }
+}
+results$study3b$registered_variances = bind_rows(variance_checks)
+results$study3b$reduced = bind_rows(reduced_results)
+show_table(select(results$study3b$registered_variances, outcome, grp, vcov))
+show_table(transmute(results$study3b$reduced, Measure = outcome,
+                     `Participant variance` = participant_variance,
+                     `Residual variance` = residual_variance,
+                     Singular = singular, `Optimizer OK` = optimizer_ok))
+
+```
+
+## SUPPLEMENTARY STUDIES
+
+```{r supplementary-labels}
+
+measure_labels = c(SabotageBehavior = "Sabotage", DeescalateBehavior = "De-escalation",
+                   SabotageDeserve = "Deserved sabotage", DeescalateDeserve = "Deserved de-escalation")
+
+```
+
+### Supplementary Study 1
+
+#### Data
+
+```{r supplementary_study1-data}
+
+raw = read_csv("../../data/supplementary/study1/raw.csv",
+               col_types = cols(.default = col_character()),
+               name_repair = ~ make.unique(str_trim(.x))) %>%
+  slice(-(1:2)) # Qualtrics question labels and import identifiers
+
+source = read_csv("../../data/supplementary/study1/supplied_cleaned.csv",
+                  col_types = cols(.default = col_character())) %>%
+  slice(-1) %>% # Supplied response-code row
+  rename_with(str_trim) %>%
+  mutate(across(c(Condition, ExclusionReason, Exclusion), as.numeric))
+
+selected = source %>% filter(Exclusion == 0)
+stopifnot(!anyDuplicated(raw$ResponseId), !anyDuplicated(selected$ID),
+          all(selected$ID %in% raw$ResponseId))
+
+# Join in the supplied participant order to preserve the bootstrap draws.
+raw = selected %>% select(participant = ID) %>%
+  left_join(raw, by = c("participant" = "ResponseId"))
+df = selected %>%
+  transmute(participant = factor(ID),
+            condition = factor(Condition, levels = c(1, 2),
+                               labels = c("Agency", "Compliance")))
+stopifnot(nrow(df) == 108, !anyNA(df$condition))
+
+# Map the two survey branches onto the same item names.
+mapping = tribble(
+  ~target, ~agency_column, ~compliance_column, ~coding,
+  "SabotageBehaviorV1Q1", "A.actual_1a", "NA.actual_1a", "numeric",
+  "SabotageBehaviorV1Q2", "A.actual_1b", "NA.actual_1b", "numeric",
+  "SabotageBehaviorV1Q3", "A.actual_1c", "NA.actual_1c", "numeric",
+  "SabotageBehaviorV1Q4", "A.actual_1d", "NA.actual_1d", "numeric",
+  "SabotageBehaviorV1Q5", "A.actual_1e", "NA.actual_1e", "numeric",
+  "SabotageBehaviorV2Q1", "A.actual_2a", "NA.actual_2a", "numeric",
+  "SabotageBehaviorV2Q2", "A.actual_2b", "NA.actual_2b", "numeric",
+  "SabotageBehaviorV2Q3", "A.actual_2c", "NA.actual_2c", "numeric",
+  "SabotageBehaviorV2Q4", "A.actual_2d", "NA.actual_2d", "numeric",
+  "SabotageBehaviorV2Q5", "A.actual_2e", "NA.actual_2e", "numeric",
+  "SabotageBehaviorV3Q1", "A.actual_3a", "NA.actual_3a", "numeric",
+  "SabotageBehaviorV3Q2", "A.actual_3b", "NA.actual_3b", "numeric",
+  "SabotageBehaviorV3Q3", "A.actual_3c", "NA.actual_3c", "numeric",
+  "SabotageBehaviorV3Q4", "A.actual_3d", "NA.actual_3d", "numeric",
+  "SabotageBehaviorV3Q5", "A.actual_3e", "NA.actual_3e", "numeric",
+  "DeescalateBehaviorV1Q1", "A.actual_1f", "NA.actual_1f", "numeric",
+  "DeescalateBehaviorV1Q2", "A.actual_1g", "NA.actual_1g", "numeric",
+  "DeescalateBehaviorV1Q3", "A.actual_1h", "NA.actual_1h", "numeric",
+  "DeescalateBehaviorV1Q4", "A.actual_1i", "NA.actual_1i", "numeric",
+  "DeescalateBehaviorV1Q5", "A.actual_1j", "NA.actual_1j", "numeric",
+  "DeescalateBehaviorV2Q1", "A.actual_2f", "NA.actual_2f", "numeric",
+  "DeescalateBehaviorV2Q2", "A.actual_2g", "NA.actual_2g", "numeric",
+  "DeescalateBehaviorV2Q3", "A.actual_2h", "NA.actual_2h", "numeric",
+  "DeescalateBehaviorV2Q4", "A.actual_2i", "NA.actual_2i", "numeric",
+  "DeescalateBehaviorV2Q5", "A.actual_2j", "NA.actual_2j", "numeric",
+  "DeescalateBehaviorV3Q1", "A.actual_3f", "NA.actual_3f", "numeric",
+  "DeescalateBehaviorV3Q2", "A.actual_3g", "NA.actual_3g", "numeric",
+  "DeescalateBehaviorV3Q3", "A.actual_3h", "NA.actual_3h", "numeric",
+  "DeescalateBehaviorV3Q4", "A.actual_3i", "NA.actual_3i", "numeric",
+  "DeescalateBehaviorV3Q5", "A.actual_3j", "NA.actual_3j", "numeric",
+  "SabotageDeserveV1Q1", "A.deserve_1a", "NA.deserve_1a", "numeric",
+  "SabotageDeserveV1Q2", "A.deserve_1b", "NA.deserve_1b", "numeric",
+  "SabotageDeserveV1Q3", "A.deserve_1c", "NA.deserve_1c", "numeric",
+  "SabotageDeserveV1Q4", "A.deserve_1d", "NA.deserve_1d", "numeric",
+  "SabotageDeserveV1Q5", "A.deserve_1e", "NA.deserve_1e", "numeric",
+  "SabotageDeserveV2Q1", "A.deserve_2a", "NA.deserve_2a", "numeric",
+  "SabotageDeserveV2Q2", "A.deserve_2b", "NA.deserve_2b", "numeric",
+  "SabotageDeserveV2Q3", "A.deserve_2c", "NA.deserve_2c", "numeric",
+  "SabotageDeserveV2Q4", "A.deserve_2d", "NA.deserve_2d", "numeric",
+  "SabotageDeserveV2Q5", "A.deserve_2e", "NA.deserve_2e", "numeric",
+  "SabotageDeserveV3Q1", "A.deserve_3a", "NA.deserve_3a", "numeric",
+  "SabotageDeserveV3Q2", "A.deserve_3b", "NA.deserve_3b", "numeric",
+  "SabotageDeserveV3Q3", "A.deserve_3c", "NA.deserve_3c", "numeric",
+  "SabotageDeserveV3Q4", "A.deserve_3d", "NA.deserve_3d", "numeric",
+  "SabotageDeserveV3Q5", "A.deserve_3e", "NA.deserve_3e", "numeric",
+  "DeescalateDeserveV1Q1", "A.deserve_1f", "NA.deserve_1f", "numeric",
+  "DeescalateDeserveV1Q2", "A.deserve_1g", "NA.deserve_1g", "numeric",
+  "DeescalateDeserveV1Q3", "A.deserve_1h", "NA.deserve_1h", "numeric",
+  "DeescalateDeserveV1Q4", "A.deserve_1i", "NA.deserve_1i", "numeric",
+  "DeescalateDeserveV1Q5", "A.deserve_1j", "NA.deserve_1j", "numeric",
+  "DeescalateDeserveV2Q1", "A.deserve_2f", "NA.deserve_2f", "numeric",
+  "DeescalateDeserveV2Q2", "A.deserve_2g", "NA.deserve_2g", "numeric",
+  "DeescalateDeserveV2Q3", "A.deserve_2h", "NA.deserve_2h", "numeric",
+  "DeescalateDeserveV2Q4", "A.deserve_2i", "NA.deserve_2i", "numeric",
+  "DeescalateDeserveV2Q5", "A.deserve_2j", "NA.deserve_2j", "numeric",
+  "DeescalateDeserveV3Q1", "A.deserve_3f", "NA.deserve_3f", "numeric",
+  "DeescalateDeserveV3Q2", "A.deserve_3g", "NA.deserve_3g", "numeric",
+  "DeescalateDeserveV3Q3", "A.deserve_3h", "NA.deserve_3h", "numeric",
+  "DeescalateDeserveV3Q4", "A.deserve_3i", "NA.deserve_3i", "numeric",
+  "DeescalateDeserveV3Q5", "A.deserve_3j", "NA.deserve_3j", "numeric"
+)
+
+columns = bind_rows(
+  mapping %>% transmute(target, column = agency_column, coding, branch = "Agency"),
+  mapping %>% transmute(target, column = compliance_column, coding, branch = "Compliance"))
+
+mapped = raw %>%
+  select(participant, all_of(unique(columns$column))) %>%
+  pivot_longer(-participant, names_to = "column", values_to = "response") %>%
+  inner_join(columns, by = "column", relationship = "many-to-many") %>%
+  left_join(df, by = "participant") %>%
+  filter(branch == condition) %>%
+  mutate(value = if_else(coding == "numeric", suppressWarnings(as.numeric(response)),
+    as.numeric(str_detect(str_c(",", replace_na(response, ""), ","),
+                          str_c(",", coding, ",")))))
+
+expected = selected %>%
+  select(participant = ID, all_of(mapping$target)) %>%
+  mutate(across(-participant, as.numeric)) %>%
+  pivot_longer(-participant, names_to = "target", values_to = "expected")
+
+item_checks = mapped %>% left_join(expected, by = c("participant", "target"))
+stopifnot(all(is.na(item_checks$value) == is.na(item_checks$expected)),
+          all(abs(item_checks$value - item_checks$expected) < 1e-6, na.rm = TRUE))
+
+# Confirm assignment agrees with the observed survey branch.
+stopifnot(all(!is.na(raw[[mapping$agency_column[1]]]) == (df$condition == "Agency")),
+          all(!is.na(raw[[mapping$compliance_column[1]]]) == (df$condition == "Compliance")))
+
+df = df %>%
+  left_join(mapped %>% select(participant, target, value) %>%
+              pivot_wider(names_from = target, values_from = value),
+            by = "participant") %>%
+  mutate(participant = factor(participant))
+
+measures = c("SabotageBehavior", "DeescalateBehavior", "SabotageDeserve", "DeescalateDeserve")
+
+story_scores = mapped %>%
+  filter(str_detect(target, "Q[1-5]$")) %>%
+  separate(target, into = c("measure", "vignette", "item"), sep = "V|Q") %>%
+  group_by(participant, measure, vignette) %>%
+  summarise(score = mean(value, na.rm = TRUE), .groups = "drop")
+
+supplied_scores = selected %>%
+  select(participant = ID, matches("V[123]Avg$")) %>%
+  mutate(across(-participant, as.numeric)) %>%
+  pivot_longer(-participant, names_to = c("measure", "vignette"),
+               names_pattern = "(.*)V([123])Avg", values_to = "supplied")
+
+score_checks = story_scores %>%
+  left_join(supplied_scores, by = c("participant", "measure", "vignette")) %>%
+  group_by(measure, vignette) %>%
+  summarise(maximum_difference_from_supplied = max(abs(score - supplied))) %>%
+  mutate(vignette = as.numeric(vignette))
+stopifnot(all(score_checks$maximum_difference_from_supplied < .001))
+
+# Average answered items within each story, then weight stories equally.
+df = df %>%
+  left_join(story_scores %>%
+              pivot_wider(names_from = c(measure, vignette), values_from = score),
+            by = "participant") %>%
+  left_join(story_scores %>%
+              group_by(participant, measure) %>%
+              summarise(score = mean(score)) %>%
+              pivot_wider(names_from = measure, values_from = score),
+            by = "participant") %>%
+  left_join(story_scores %>%
+              filter(vignette != "2") %>%
+              group_by(participant, measure) %>%
+              summarise(score = mean(score)) %>%
+              mutate(measure = str_c(measure, "_without2")) %>%
+              pivot_wider(names_from = measure, values_from = score),
+            by = "participant") %>%
+  mutate(participant = factor(participant))
+
+df.supplementary1 = df
+show_table(score_checks)
+
+```
+
+#### Condition comparisons
+
+```{r supplementary_study1-comparisons}
+
+# Behavioral condition comparisons and additional deservingness outcomes.
+descriptives = list()
+comparisons = list()
+for (measure in measures) {
+  for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3", "Vignettes 1 and 3")) {
+    column = if (part == "Overall") measure else if (part == "Vignettes 1 and 3")
+      paste0(measure, "_without2") else paste0(measure, "_", substr(part, 10, 10))
+    d = data.frame(condition = df$condition, score = df[[column]])
+    model = lm(score ~ condition, data = d)
+    comparison = as.data.frame(summary(contrast(emmeans(model, ~ condition),
+                    method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
+    comparison$measure = measure
+    comparison$part = part
+    comparisons[[paste(measure, part)]] = comparison
+    descriptives[[paste(measure, part)]] = d %>% group_by(condition) %>%
+      summarise(n = n(), mean = mean(score), sd = sd(score)) %>%
+      mutate(measure = measure, part = part)
+  }
+}
+comparisons = bind_rows(comparisons)
+descriptives = bind_rows(descriptives)
+show_table(filter(descriptives, part == "Overall") %>% mutate(measure = unname(measure_labels[measure])))
+show_table(select(comparisons, measure, part, estimate, lower.CL, upper.CL, df, t.ratio, p.value) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study1 = list(descriptives = descriptives, comparisons = comparisons, score_checks = score_checks, n = nrow(df))
+
+```
+
+#### Registered condition by vignette ANOVAs
+
+```{r supplementary_study1-anova}
+
+# Greenhouse-Geisser correction is an implementation choice.
+anova_results = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  wide = df[paste0(measure, "_", 1:3)]
+  d = data.frame(participant = df$participant, condition = df$condition, wide) %>%
+    pivot_longer(-c(participant, condition), names_to = "vignette", values_to = "score")
+  d$vignette = factor(d$vignette)
+  contrasts(d$condition) = contr.sum(2)
+  contrasts(d$vignette) = contr.sum(3)
+  model = aov(score ~ condition * vignette + Error(participant / vignette), data = d)
+  a = summary(model)
+  residual_matrix = residuals(lm(as.matrix(wide) ~ df$condition))
+  covariance = crossprod(residual_matrix) / (nrow(df) - 2)
+  center = diag(3) - matrix(1 / 3, 3, 3)
+  sc = center %*% covariance %*% center
+  epsilon = sum(diag(sc))^2 / (2 * sum(sc^2))
+  between = as.data.frame(a[["Error: participant"]][[1]])
+  within = as.data.frame(a[["Error: participant:vignette"]][[1]])
+  tab = data.frame(measure = measure, term = c("condition", "vignette", "condition:vignette"),
+    df1 = c(between$Df[1], within$Df[1:2]),
+    df2 = c(between$Df[2], rep(tail(within$Df, 1), 2)),
+    F = c(between$`F value`[1], within$`F value`[1:2]), epsilon = c(1, epsilon, epsilon))
+  tab$df1_GG = tab$df1 * tab$epsilon
+  tab$df2_GG = tab$df2 * tab$epsilon
+  tab$p_GG = pf(tab$F, tab$df1_GG, tab$df2_GG, lower.tail = FALSE)
+  anova_results[[measure]] = tab
+}
+anova_results = bind_rows(anova_results)
+show_table(select(anova_results, measure, term, df1_GG, df2_GG, F, p_GG) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study1$anova = anova_results
+# The source averages 14 answered items for one participant. Quantify that difference.
+source_model = lm(as.numeric(selected$DeescalateBehaviorAvg) ~ df$condition)
+source_contrast = as.data.frame(summary(contrast(emmeans(source_model, ~ condition),
+  method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
+results$supplementary_study1$source_missing_item_comparison = source_contrast
+
+```
+
+#### Plots
+
+```{r supplementary_study1-plot}
+
+plot_data = df %>% select(participant, condition, SabotageBehavior, DeescalateBehavior) %>%
+  pivot_longer(c(SabotageBehavior, DeescalateBehavior), names_to = "outcome", values_to = "score")
+plot_data$outcome = factor(plot_data$outcome, levels = c("SabotageBehavior", "DeescalateBehavior"),
+                           labels = c("Sabotage", "De-escalation"))
+plot_summary = plot_data %>% group_by(condition, outcome) %>%
+  summarise(mean = mean(score), se = sd(score) / sqrt(n()), n = n()) %>%
+  mutate(lower = mean - qt(.975, n - 1) * se, upper = mean + qt(.975, n - 1) * se)
+plot.supplementary1 = ggplot(plot_data, aes(condition, score, color = condition)) +
+  geom_point(position = position_jitter(width = .16, height = 0, seed = 1),
+             alpha = .18, size = 1.5) +
+  geom_errorbar(data = plot_summary, aes(y = mean, ymin = lower, ymax = upper),
+                width = .10, color = "black", linewidth = .8) +
+  geom_point(data = plot_summary, aes(y = mean), shape = 21,
+             fill = "white", color = "black", size = 4, stroke = 1) +
+  geom_text(data = plot_summary,
+            aes(y = .35, label = paste0("n=", n)),
+            color = "#333333", size = 4.3) +
+  facet_wrap(~ outcome, nrow = 1) +
+  scale_color_manual(values = condition_colors, guide = "none") +
+  scale_y_continuous(breaks = 1:5) +
+  coord_cartesian(ylim = c(1, 5), clip = "off") +
+  labs(x = NULL, y = "Reported willingness\nto perform the behavior\n(1 = low; 5 = high)") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 18),
+        axis.title.y = element_text(size = 18, lineheight = .95),
+        axis.text = element_text(size = 16),
+        panel.spacing = unit(1, "cm"),
+        plot.margin = margin(5.5, 5.5, 25, 5.5))
+
+plot.supplementary1
+
+ggsave("../../figures/supplementary/study1/supplementary_study1.pdf",
+       plot.supplementary1, width = 12, height = 5, bg = "white")
+ggsave("../../figures/supplementary/study1/supplementary_study1.png",
+       plot.supplementary1, width = 12, height = 5, dpi = 600, bg = "white")
+
+```
+
+### Supplementary Study 2
+
+#### Data
+
+```{r supplementary_study2-data}
+
+raw = read_csv("../../data/supplementary/study2/raw.csv",
+               col_types = cols(.default = col_character()),
+               name_repair = ~ make.unique(str_trim(.x))) %>%
+  slice(-(1:2)) # Qualtrics question labels and import identifiers
+
+source = read_csv("../../data/supplementary/study2/supplied_cleaned.csv",
+                  col_types = cols(.default = col_character())) %>%
+  slice(-1) %>% # Supplied response-code row
+  rename_with(str_trim) %>%
+  mutate(across(c(Condition, ExclusionReason, Exclusion), as.numeric))
+
+selected = source %>% filter(Exclusion == 0)
+stopifnot(!anyDuplicated(raw$ResponseId), !anyDuplicated(selected$ID),
+          all(selected$ID %in% raw$ResponseId))
+
+# Join in the supplied participant order to preserve the bootstrap draws.
+raw = selected %>% select(participant = ID) %>%
+  left_join(raw, by = c("participant" = "ResponseId"))
+df = selected %>%
+  transmute(participant = factor(ID),
+            condition = factor(Condition, levels = c(1, 2),
+                               labels = c("Agency", "Compliance")))
+stopifnot(nrow(df) == 259, !anyNA(df$condition))
+
+# Map the two survey branches onto the same item names.
+mapping = tribble(
+  ~target, ~agency_column, ~compliance_column, ~coding,
+  "SabotageBehaviorV1Q1", "A.actual_1a", "NA.actual_1a", "numeric",
+  "SabotageBehaviorV1Q2", "A.actual_1b", "NA.actual_1b", "numeric",
+  "SabotageBehaviorV1Q3", "A.actual_1c", "NA.actual_1c", "numeric",
+  "SabotageBehaviorV1Q4", "A.actual_1d", "NA.actual_1d", "numeric",
+  "SabotageBehaviorV1Q5", "A.actual_1e", "NA.actual_1e", "numeric",
+  "SabotageBehaviorV2Q1", "A.actual_2a", "NA.actual_2a", "numeric",
+  "SabotageBehaviorV2Q2", "A.actual_2b", "NA.actual_2b", "numeric",
+  "SabotageBehaviorV2Q3", "A.actual_2c", "NA.actual_2c", "numeric",
+  "SabotageBehaviorV2Q4", "A.actual_2d", "NA.actual_2d", "numeric",
+  "SabotageBehaviorV2Q5", "A.actual_2e", "NA.actual_2e", "numeric",
+  "SabotageBehaviorV3Q1", "A.actual_3a", "NA.actual_3a", "numeric",
+  "SabotageBehaviorV3Q2", "A.actual_3b", "NA.actual_3b", "numeric",
+  "SabotageBehaviorV3Q3", "A.actual_3c", "NA.actual_3c", "numeric",
+  "SabotageBehaviorV3Q4", "A.actual_3d", "NA.actual_3d", "numeric",
+  "SabotageBehaviorV3Q5", "A.actual_3e", "NA.actual_3e", "numeric",
+  "DeescalateBehaviorV1Q1", "A.actual_1f", "NA.actual_1f", "numeric",
+  "DeescalateBehaviorV1Q2", "A.actual_1g", "NA.actual_1g", "numeric",
+  "DeescalateBehaviorV1Q3", "A.actual_1h", "NA.actual_1h", "numeric",
+  "DeescalateBehaviorV1Q4", "A.actual_1i", "NA.actual_1i", "numeric",
+  "DeescalateBehaviorV1Q5", "A.actual_1j", "NA.actual_1j", "numeric",
+  "DeescalateBehaviorV2Q1", "A.actual_2f", "NA.actual_2f", "numeric",
+  "DeescalateBehaviorV2Q2", "A.actual_2g", "NA.actual_2g", "numeric",
+  "DeescalateBehaviorV2Q3", "A.actual_2h", "NA.actual_2h", "numeric",
+  "DeescalateBehaviorV2Q4", "A.actual_2i", "NA.actual_2i", "numeric",
+  "DeescalateBehaviorV2Q5", "A.actual_2j", "NA.actual_2j", "numeric",
+  "DeescalateBehaviorV3Q1", "A.actual_3f", "NA.actual_3f", "numeric",
+  "DeescalateBehaviorV3Q2", "A.actual_3g", "NA.actual_3g", "numeric",
+  "DeescalateBehaviorV3Q3", "A.actual_3h", "NA.actual_3h", "numeric",
+  "DeescalateBehaviorV3Q4", "A.actual_3i", "NA.actual_3i", "numeric",
+  "DeescalateBehaviorV3Q5", "A.actual_3j", "NA.actual_3j", "numeric",
+  "SabotageBehaviorV1ReasonDeserved", "A.actualRsnAnti_1", "NA.reasons_1anti", "6",
+  "SabotageBehaviorV1ReasonObligation", "A.actualRsnAnti_1", "NA.reasons_1anti", "5",
+  "SabotageBehaviorV2ReasonDeserved", "A.actualRsnAnti_2", "NA.reasons_2anti", "6",
+  "SabotageBehaviorV2ReasonObligation", "A.actualRsnAnti_2", "NA.reasons_2anti", "5",
+  "SabotageBehaviorV3ReasonDeserved", "A.actualRsnAnti_3", "NA.reasons_3anti", "6",
+  "SabotageBehaviorV3ReasonObligation", "A.actualRsnAnti_3", "NA.reasons_3anti", "5",
+  "DeescalateBehaviorV1ReasonDeserved", "A.actualRsnPro_1", "NA.reasons_1pro", "6",
+  "DeescalateBehaviorV1ReasonObligation", "A.actualRsnPro_1", "NA.reasons_1pro", "5",
+  "DeescalateBehaviorV2ReasonDeserved", "A.actualRsnPro_2", "NA.reasons_2pro", "6",
+  "DeescalateBehaviorV2ReasonObligation", "A.actualRsnPro_2", "NA.reasons_2pro", "5",
+  "DeescalateBehaviorV3ReasonDeserved", "A.actualRsnPro_3", "NA.reasons_3pro", "6",
+  "DeescalateBehaviorV3ReasonObligation", "A.actualRsnPro_3", "NA.reasons_3pro", "5"
+)
+
+columns = bind_rows(
+  mapping %>% transmute(target, column = agency_column, coding, branch = "Agency"),
+  mapping %>% transmute(target, column = compliance_column, coding, branch = "Compliance"))
+
+mapped = raw %>%
+  select(participant, all_of(unique(columns$column))) %>%
+  pivot_longer(-participant, names_to = "column", values_to = "response") %>%
+  inner_join(columns, by = "column", relationship = "many-to-many") %>%
+  left_join(df, by = "participant") %>%
+  filter(branch == condition) %>%
+  mutate(value = if_else(coding == "numeric", suppressWarnings(as.numeric(response)),
+    as.numeric(str_detect(str_c(",", replace_na(response, ""), ","),
+                          str_c(",", coding, ",")))))
+
+expected = selected %>%
+  select(participant = ID, all_of(mapping$target)) %>%
+  mutate(across(-participant, as.numeric)) %>%
+  pivot_longer(-participant, names_to = "target", values_to = "expected")
+
+item_checks = mapped %>% left_join(expected, by = c("participant", "target"))
+stopifnot(all(is.na(item_checks$value) == is.na(item_checks$expected)),
+          all(abs(item_checks$value - item_checks$expected) < 1e-6, na.rm = TRUE))
+
+# Confirm assignment agrees with the observed survey branch.
+stopifnot(all(!is.na(raw[[mapping$agency_column[1]]]) == (df$condition == "Agency")),
+          all(!is.na(raw[[mapping$compliance_column[1]]]) == (df$condition == "Compliance")))
+
+df = df %>%
+  left_join(mapped %>% select(participant, target, value) %>%
+              pivot_wider(names_from = target, values_from = value),
+            by = "participant") %>%
+  mutate(participant = factor(participant))
+
+measures = c("SabotageBehavior", "DeescalateBehavior")
+
+story_scores = mapped %>%
+  filter(str_detect(target, "Q[1-5]$")) %>%
+  separate(target, into = c("measure", "vignette", "item"), sep = "V|Q") %>%
+  group_by(participant, measure, vignette) %>%
+  summarise(score = mean(value, na.rm = TRUE), .groups = "drop")
+
+supplied_scores = selected %>%
+  select(participant = ID, matches("V[123]Avg$")) %>%
+  mutate(across(-participant, as.numeric)) %>%
+  pivot_longer(-participant, names_to = c("measure", "vignette"),
+               names_pattern = "(.*)V([123])Avg", values_to = "supplied")
+
+score_checks = story_scores %>%
+  left_join(supplied_scores, by = c("participant", "measure", "vignette")) %>%
+  group_by(measure, vignette) %>%
+  summarise(maximum_difference_from_supplied = max(abs(score - supplied))) %>%
+  mutate(vignette = as.numeric(vignette))
+stopifnot(all(score_checks$maximum_difference_from_supplied < .001))
+
+# Average answered items within each story, then weight stories equally.
+df = df %>%
+  left_join(story_scores %>%
+              pivot_wider(names_from = c(measure, vignette), values_from = score),
+            by = "participant") %>%
+  left_join(story_scores %>%
+              group_by(participant, measure) %>%
+              summarise(score = mean(score)) %>%
+              pivot_wider(names_from = measure, values_from = score),
+            by = "participant") %>%
+  left_join(story_scores %>%
+              filter(vignette != "2") %>%
+              group_by(participant, measure) %>%
+              summarise(score = mean(score)) %>%
+              mutate(measure = str_c(measure, "_without2")) %>%
+              pivot_wider(names_from = measure, values_from = score),
+            by = "participant") %>%
+  mutate(participant = factor(participant))
+
+df.supplementary2 = df
+show_table(score_checks)
+
+```
+
+#### Condition comparisons
+
+```{r supplementary_study2-comparisons}
+
+# Behavioral condition comparisons and additional deservingness outcomes.
+descriptives = list()
+comparisons = list()
+for (measure in measures) {
+  for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3", "Vignettes 1 and 3")) {
+    column = if (part == "Overall") measure else if (part == "Vignettes 1 and 3")
+      paste0(measure, "_without2") else paste0(measure, "_", substr(part, 10, 10))
+    d = data.frame(condition = df$condition, score = df[[column]])
+    model = lm(score ~ condition, data = d)
+    comparison = as.data.frame(summary(contrast(emmeans(model, ~ condition),
+                    method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
+    comparison$measure = measure
+    comparison$part = part
+    comparisons[[paste(measure, part)]] = comparison
+    descriptives[[paste(measure, part)]] = d %>% group_by(condition) %>%
+      summarise(n = n(), mean = mean(score), sd = sd(score)) %>%
+      mutate(measure = measure, part = part)
+  }
+}
+comparisons = bind_rows(comparisons)
+descriptives = bind_rows(descriptives)
+show_table(filter(descriptives, part == "Overall") %>% mutate(measure = unname(measure_labels[measure])))
+show_table(select(comparisons, measure, part, estimate, lower.CL, upper.CL, df, t.ratio, p.value) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study2 = list(descriptives = descriptives, comparisons = comparisons, score_checks = score_checks, n = nrow(df))
+
+```
+
+#### Registered condition by vignette ANOVAs
+
+```{r supplementary_study2-anova}
+
+# Greenhouse-Geisser correction is an implementation choice.
+anova_results = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  wide = df[paste0(measure, "_", 1:3)]
+  d = data.frame(participant = df$participant, condition = df$condition, wide) %>%
+    pivot_longer(-c(participant, condition), names_to = "vignette", values_to = "score")
+  d$vignette = factor(d$vignette)
+  contrasts(d$condition) = contr.sum(2)
+  contrasts(d$vignette) = contr.sum(3)
+  model = aov(score ~ condition * vignette + Error(participant / vignette), data = d)
+  a = summary(model)
+  residual_matrix = residuals(lm(as.matrix(wide) ~ df$condition))
+  covariance = crossprod(residual_matrix) / (nrow(df) - 2)
+  center = diag(3) - matrix(1 / 3, 3, 3)
+  sc = center %*% covariance %*% center
+  epsilon = sum(diag(sc))^2 / (2 * sum(sc^2))
+  between = as.data.frame(a[["Error: participant"]][[1]])
+  within = as.data.frame(a[["Error: participant:vignette"]][[1]])
+  tab = data.frame(measure = measure, term = c("condition", "vignette", "condition:vignette"),
+    df1 = c(between$Df[1], within$Df[1:2]),
+    df2 = c(between$Df[2], rep(tail(within$Df, 1), 2)),
+    F = c(between$`F value`[1], within$`F value`[1:2]), epsilon = c(1, epsilon, epsilon))
+  tab$df1_GG = tab$df1 * tab$epsilon
+  tab$df2_GG = tab$df2 * tab$epsilon
+  tab$p_GG = pf(tab$F, tab$df1_GG, tab$df2_GG, lower.tail = FALSE)
+  anova_results[[measure]] = tab
+}
+anova_results = bind_rows(anova_results)
+show_table(select(anova_results, measure, term, df1_GG, df2_GG, F, p_GG) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study2$anova = anova_results
+
+```
+
+#### Registered second attention check sensitivity
+
+```{r supplementary_study2-second-check}
+
+# The supplied sample retains 27 failures; this sensitivity applies the registered check.
+strict = df[as.numeric(selected$DifferentCheck) == 2, ]
+strict$participant = droplevels(strict$participant)
+stopifnot(nrow(strict) == 232)
+strict_comparisons = list()
+strict_anova = list()
+strict_descriptives = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  dmean = data.frame(condition = strict$condition, score = strict[[measure]])
+  model = lm(score ~ condition, data = dmean)
+  tab = as.data.frame(summary(contrast(emmeans(model, ~ condition),
+    method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
+  tab$measure = measure
+  strict_comparisons[[measure]] = tab
+  strict_descriptives[[measure]] = dmean %>% group_by(condition) %>%
+    summarise(n = n(), mean = mean(score), sd = sd(score)) %>% mutate(measure = measure)
+  wide = strict[paste0(measure, "_", 1:3)]
+  d = data.frame(participant = strict$participant, condition = strict$condition, wide) %>%
+    pivot_longer(-c(participant, condition), names_to = "vignette", values_to = "score")
+  d$vignette = factor(d$vignette)
+  contrasts(d$condition) = contr.sum(2)
+  contrasts(d$vignette) = contr.sum(3)
+  model = aov(score ~ condition * vignette + Error(participant / vignette), data = d)
+  a = summary(model)
+  residual_matrix = residuals(lm(as.matrix(wide) ~ strict$condition))
+  covariance = crossprod(residual_matrix) / (nrow(strict) - 2)
+  center = diag(3) - matrix(1 / 3, 3, 3)
+  sc = center %*% covariance %*% center
+  epsilon = sum(diag(sc))^2 / (2 * sum(sc^2))
+  between = as.data.frame(a[["Error: participant"]][[1]])
+  within = as.data.frame(a[["Error: participant:vignette"]][[1]])
+  tab = data.frame(measure = measure, term = c("condition", "vignette", "condition:vignette"),
+    df1 = c(between$Df[1], within$Df[1:2]), df2 = c(between$Df[2], rep(tail(within$Df, 1), 2)),
+    F = c(between$`F value`[1], within$`F value`[1:2]), epsilon = c(1, epsilon, epsilon))
+  tab$df1_GG = tab$df1 * tab$epsilon
+  tab$df2_GG = tab$df2 * tab$epsilon
+  tab$p_GG = pf(tab$F, tab$df1_GG, tab$df2_GG, lower.tail = FALSE)
+  strict_anova[[measure]] = tab
+}
+results$supplementary_study2$strict_comparisons = bind_rows(strict_comparisons)
+results$supplementary_study2$strict_descriptives = bind_rows(strict_descriptives)
+results$supplementary_study2$strict_anova = bind_rows(strict_anova)
+show_table(results$supplementary_study2$strict_descriptives)
+show_table(select(results$supplementary_study2$strict_anova,
+                  measure, term, df1_GG, df2_GG, F, p_GG))
+
+```
+
+#### Exploratory parallel mediation using vignettes 1 and 3
+
+```{r supplementary_study2-mediation}
+
+# Checkbox reason counts; bootstrap participants, 5,000 samples.
+set.seed(20260912)
+mediation_results = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  stories = c(1, 3)
+  m = data.frame(agency = as.numeric(df$condition == "Agency"),
+    y = rowMeans(df[paste0(measure, "_", stories)]),
+    deserved = rowSums(df[paste0(measure, "V", stories, "ReasonDeserved")]),
+    obligation = rowSums(df[paste0(measure, "V", stories, "ReasonObligation")]))
+  stopifnot(all(complete.cases(m)))
+  a_deserved = lm(deserved ~ agency, data = m)
+  a_obligation = lm(obligation ~ agency, data = m)
+  direct = lm(y ~ agency + deserved + obligation, data = m)
+  total = lm(y ~ agency, data = m)
+  paths = list("Condition to deservingness" = list(a_deserved, "agency"),
+               "Condition to obligation" = list(a_obligation, "agency"),
+               "Deservingness to outcome" = list(direct, "deserved"),
+               "Obligation to outcome" = list(direct, "obligation"),
+               "Direct condition effect" = list(direct, "agency"),
+               "Total condition effect" = list(total, "agency"))
+  rows = lapply(names(paths), function(label) {
+    fit = paths[[label]][[1]]; term = paths[[label]][[2]]
+    co = coef(summary(fit))[term, ]; ci = confint(fit, term)
+    data.frame(measure = measure, effect = label, estimate = co[1],
+      lower = ci[1], upper = ci[2], SE = co[2], df = df.residual(fit),
+      t = co[3], p.value = co[4], row.names = NULL)
+  })
+  statistic = function(data, indices) {
+    d = data[indices, ]; x = cbind(1, d$agency)
+    a1 = lm.fit(x, d$deserved)$coefficients[2]
+    a2 = lm.fit(x, d$obligation)$coefficients[2]
+    b = lm.fit(cbind(x, d$deserved, d$obligation), d$y)$coefficients
+    c(a1 * b[3], a2 * b[4], a1 * b[3] + a2 * b[4])
+  }
+  samples = boot(m, statistic, R = 5000)
+  stopifnot(all(is.finite(samples$t)))
+  ci = apply(samples$t, 2, quantile, probs = c(.025, .975))
+  indirect = data.frame(measure = measure,
+    effect = c("Indirect through deservingness", "Indirect through obligation", "Total indirect"),
+    estimate = as.numeric(samples$t0), lower = ci[1, ], upper = ci[2, ])
+  mediation_results[[measure]] = bind_rows(bind_rows(rows), indirect)
+}
+mediation_results = bind_rows(mediation_results)
+show_table(filter(mediation_results, !is.na(t)) %>% mutate(measure = unname(measure_labels[measure])))
+show_table(filter(mediation_results, is.na(t)) %>% select(measure, effect, estimate, lower, upper) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study2$mediation = mediation_results
+
+```
+
+#### Plots
+
+```{r supplementary_study2-plot}
+
+plot_data = df %>% select(participant, condition, SabotageBehavior, DeescalateBehavior) %>%
+  pivot_longer(c(SabotageBehavior, DeescalateBehavior), names_to = "outcome", values_to = "score")
+plot_data$outcome = factor(plot_data$outcome, levels = c("SabotageBehavior", "DeescalateBehavior"),
+                           labels = c("Sabotage", "De-escalation"))
+plot_summary = plot_data %>% group_by(condition, outcome) %>%
+  summarise(mean = mean(score), se = sd(score) / sqrt(n()), n = n()) %>%
+  mutate(lower = mean - qt(.975, n - 1) * se, upper = mean + qt(.975, n - 1) * se)
+plot.supplementary2 = ggplot(plot_data, aes(condition, score, color = condition)) +
+  geom_point(position = position_jitter(width = .16, height = 0, seed = 1),
+             alpha = .18, size = 1.5) +
+  geom_errorbar(data = plot_summary, aes(y = mean, ymin = lower, ymax = upper),
+                width = .10, color = "black", linewidth = .8) +
+  geom_point(data = plot_summary, aes(y = mean), shape = 21,
+             fill = "white", color = "black", size = 4, stroke = 1) +
+  geom_text(data = plot_summary,
+            aes(y = .35, label = paste0("n=", n)),
+            color = "#333333", size = 4.3) +
+  facet_wrap(~ outcome, nrow = 1) +
+  scale_color_manual(values = condition_colors, guide = "none") +
+  scale_y_continuous(breaks = 1:5) +
+  coord_cartesian(ylim = c(1, 5), clip = "off") +
+  labs(x = NULL, y = "Reported willingness\nto perform the behavior\n(1 = low; 5 = high)") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 18),
+        axis.title.y = element_text(size = 18, lineheight = .95),
+        axis.text = element_text(size = 16),
+        panel.spacing = unit(1, "cm"),
+        plot.margin = margin(5.5, 5.5, 25, 5.5))
+
+plot.supplementary2
+
+ggsave("../../figures/supplementary/study2/supplementary_study2.pdf",
+       plot.supplementary2, width = 12, height = 5, bg = "white")
+ggsave("../../figures/supplementary/study2/supplementary_study2.png",
+       plot.supplementary2, width = 12, height = 5, dpi = 600, bg = "white")
+
+```
+
+### Supplementary Study 3
+
+#### Data
+
+```{r supplementary_study3-data}
+
+raw = read_csv("../../data/supplementary/study3/raw.csv",
+               col_types = cols(.default = col_character()),
+               name_repair = ~ make.unique(str_trim(.x))) %>%
+  slice(-(1:2)) # Qualtrics question labels and import identifiers
+
+source = read_csv("../../data/supplementary/study3/supplied_cleaned.csv",
+                  col_types = cols(.default = col_character())) %>%
+  slice(-1) %>% # Supplied response-code row
+  rename_with(str_trim) %>%
+  mutate(across(c(Condition, ExclusionReason, Exclusion), as.numeric))
+
+selected = source %>% filter(Exclusion == 0)
+stopifnot(!anyDuplicated(raw$ResponseId), !anyDuplicated(selected$ID),
+          all(selected$ID %in% raw$ResponseId))
+
+# Join in the supplied participant order to preserve the bootstrap draws.
+raw = selected %>% select(participant = ID) %>%
+  left_join(raw, by = c("participant" = "ResponseId"))
+df = selected %>%
+  transmute(participant = factor(ID),
+            condition = factor(Condition, levels = c(1, 2),
+                               labels = c("Agency", "Compliance")))
+stopifnot(nrow(df) == 265, !anyNA(df$condition))
+
+# Map the two survey branches onto the same item names.
+mapping = tribble(
+  ~target, ~agency_column, ~compliance_column, ~coding,
+  "SabotageBehaviorV1Q1", "Agency_1_Sabotage_1", "Comp_1_Sabotage_1", "numeric",
+  "SabotageBehaviorV1Q2", "Agency_1_Sabotage_2", "Comp_1_Sabotage_2", "numeric",
+  "SabotageBehaviorV1Q3", "Agency_1_Sabotage_3", "Comp_1_Sabotage_3", "numeric",
+  "SabotageBehaviorV1Q4", "Agency_1_Sabotage_4", "Comp_1_Sabotage_4", "numeric",
+  "SabotageBehaviorV1Q5", "Agency_1_Sabotage_5", "Comp_1_Sabotage_5", "numeric",
+  "SabotageBehaviorV2Q1", "Agency_2_Sabotage_1", "Comp_2_Sabotage_1", "numeric",
+  "SabotageBehaviorV2Q2", "Agency_2_Sabotage_2", "Comp_2_Sabotage_2", "numeric",
+  "SabotageBehaviorV2Q3", "Agency_2_Sabotage_3", "Comp_2_Sabotage_3", "numeric",
+  "SabotageBehaviorV2Q4", "Agency_2_Sabotage_4", "Comp_2_Sabotage_4", "numeric",
+  "SabotageBehaviorV2Q5", "Agency_2_Sabotage_5", "Comp_2_Sabotage_5", "numeric",
+  "SabotageBehaviorV3Q1", "Agency_3_Sabotage_1", "Comp_3_Sabotage_1", "numeric",
+  "SabotageBehaviorV3Q2", "Agency_3_Sabotage_2", "Comp_3_Sabotage_2", "numeric",
+  "SabotageBehaviorV3Q3", "Agency_3_Sabotage_3", "Comp_3_Sabotage_3", "numeric",
+  "SabotageBehaviorV3Q4", "Agency_3_Sabotage_4", "Comp_3_Sabotage_4", "numeric",
+  "SabotageBehaviorV3Q5", "Agency_3_Sabotage_5", "Comp_3_Sabotage_5", "numeric",
+  "DeescalateBehaviorV1Q1", "Agency_1_Deescal_1", "Comp_1_Deescal_1", "numeric",
+  "DeescalateBehaviorV1Q2", "Agency_1_Deescal_2", "Comp_1_Deescal_2", "numeric",
+  "DeescalateBehaviorV1Q3", "Agency_1_Deescal_3", "Comp_1_Deescal_3", "numeric",
+  "DeescalateBehaviorV1Q4", "Agency_1_Deescal_4", "Comp_1_Deescal_4", "numeric",
+  "DeescalateBehaviorV1Q5", "Agency_1_Deescal_5", "Comp_1_Deescal_5", "numeric",
+  "DeescalateBehaviorV2Q1", "Agency_2_Deescal_1", "Comp_2_Deescal_1", "numeric",
+  "DeescalateBehaviorV2Q2", "Agency_2_Deescal_2", "Comp_2_Deescal_2", "numeric",
+  "DeescalateBehaviorV2Q3", "Agency_2_Deescal_3", "Comp_2_Deescal_3", "numeric",
+  "DeescalateBehaviorV2Q4", "Agency_2_Deescal_4", "Comp_2_Deescal_4", "numeric",
+  "DeescalateBehaviorV2Q5", "Agency_2_Deescal_5", "Comp_2_Deescal_5", "numeric",
+  "DeescalateBehaviorV3Q1", "Agency_3_Deescal_1", "Comp_3_Deescal_1", "numeric",
+  "DeescalateBehaviorV3Q2", "Agency_3_Deescal_2", "Comp_3_Deescal_2", "numeric",
+  "DeescalateBehaviorV3Q3", "Agency_3_Deescal_3", "Comp_3_Deescal_3", "numeric",
+  "DeescalateBehaviorV3Q4", "Agency_3_Deescal_4", "Comp_3_Deescal_4", "numeric",
+  "DeescalateBehaviorV3Q5", "Agency_3_Deescal_5", "Comp_3_Deescal_5", "numeric",
+  "SabotageBehaviorV1ReasonDeserved", "Agency_1_Sabotage_De", "Comp_1_Sabotage_Des", "numeric",
+  "SabotageBehaviorV1ReasonObligation", "Agency_1_Sabotage_O", "Comp_1_Sabotage_Obli", "numeric",
+  "SabotageBehaviorV2ReasonDeserved", "Agency_2_Sabotage_D", "Comp_2_Sabotage_Des", "numeric",
+  "SabotageBehaviorV2ReasonObligation", "Agency_2_Sabotage_O", "Comp_2_Sabotage_Obl", "numeric",
+  "SabotageBehaviorV3ReasonDeserved", "Agency_3_Sabotage_D", "Comp_3_Sabotage_Des", "numeric",
+  "SabotageBehaviorV3ReasonObligation", "Agency_3_Sabotage_O", "Comp_3_Sabotage_Obl", "numeric",
+  "DeescalateBehaviorV1ReasonDeserved", "Agency_1_Deescal_Des", "Comp_1_Deescal_Deser", "numeric",
+  "DeescalateBehaviorV1ReasonObligation", "Agency_1_Deescal_Ob", "Comp_1_Deescal_Obli", "numeric",
+  "DeescalateBehaviorV2ReasonDeserved", "Agency_2_Deescal_De", "Comp_2_Deescal_Dese", "numeric",
+  "DeescalateBehaviorV2ReasonObligation", "Agency_2_Deescal_Ob", "Comp_2_Deescal_Oblig", "numeric",
+  "DeescalateBehaviorV3ReasonDeserved", "Agency_3_Deescal_Des", "Comp_3_Deescal_Deser", "numeric",
+  "DeescalateBehaviorV3ReasonObligation", "Agency_3_Deescal_Obl", "Comp_3_Deescal_Oblig", "numeric"
+)
+
+columns = bind_rows(
+  mapping %>% transmute(target, column = agency_column, coding, branch = "Agency"),
+  mapping %>% transmute(target, column = compliance_column, coding, branch = "Compliance"))
+
+mapped = raw %>%
+  select(participant, all_of(unique(columns$column))) %>%
+  pivot_longer(-participant, names_to = "column", values_to = "response") %>%
+  inner_join(columns, by = "column", relationship = "many-to-many") %>%
+  left_join(df, by = "participant") %>%
+  filter(branch == condition) %>%
+  mutate(value = if_else(coding == "numeric", suppressWarnings(as.numeric(response)),
+    as.numeric(str_detect(str_c(",", replace_na(response, ""), ","),
+                          str_c(",", coding, ",")))))
+
+expected = selected %>%
+  select(participant = ID, all_of(mapping$target)) %>%
+  mutate(across(-participant, as.numeric)) %>%
+  pivot_longer(-participant, names_to = "target", values_to = "expected")
+
+item_checks = mapped %>% left_join(expected, by = c("participant", "target"))
+stopifnot(all(is.na(item_checks$value) == is.na(item_checks$expected)),
+          all(abs(item_checks$value - item_checks$expected) < 1e-6, na.rm = TRUE))
+
+# Confirm assignment agrees with the observed survey branch.
+stopifnot(all(!is.na(raw[[mapping$agency_column[1]]]) == (df$condition == "Agency")),
+          all(!is.na(raw[[mapping$compliance_column[1]]]) == (df$condition == "Compliance")))
+
+df = df %>%
+  left_join(mapped %>% select(participant, target, value) %>%
+              pivot_wider(names_from = target, values_from = value),
+            by = "participant") %>%
+  mutate(participant = factor(participant))
+
+measures = c("SabotageBehavior", "DeescalateBehavior")
+
+story_scores = mapped %>%
+  filter(str_detect(target, "Q[1-5]$")) %>%
+  separate(target, into = c("measure", "vignette", "item"), sep = "V|Q") %>%
+  group_by(participant, measure, vignette) %>%
+  summarise(score = mean(value, na.rm = TRUE), .groups = "drop")
+
+supplied_scores = selected %>%
+  select(participant = ID, matches("V[123]Avg$")) %>%
+  mutate(across(-participant, as.numeric)) %>%
+  pivot_longer(-participant, names_to = c("measure", "vignette"),
+               names_pattern = "(.*)V([123])Avg", values_to = "supplied")
+
+score_checks = story_scores %>%
+  left_join(supplied_scores, by = c("participant", "measure", "vignette")) %>%
+  group_by(measure, vignette) %>%
+  summarise(maximum_difference_from_supplied = max(abs(score - supplied))) %>%
+  mutate(vignette = as.numeric(vignette))
+stopifnot(all(score_checks$maximum_difference_from_supplied < .001))
+
+# Average answered items within each story, then weight stories equally.
+df = df %>%
+  left_join(story_scores %>%
+              pivot_wider(names_from = c(measure, vignette), values_from = score),
+            by = "participant") %>%
+  left_join(story_scores %>%
+              group_by(participant, measure) %>%
+              summarise(score = mean(score)) %>%
+              pivot_wider(names_from = measure, values_from = score),
+            by = "participant") %>%
+  left_join(story_scores %>%
+              filter(vignette != "2") %>%
+              group_by(participant, measure) %>%
+              summarise(score = mean(score)) %>%
+              mutate(measure = str_c(measure, "_without2")) %>%
+              pivot_wider(names_from = measure, values_from = score),
+            by = "participant") %>%
+  mutate(participant = factor(participant))
+
+df.supplementary3 = df
+show_table(score_checks)
+
+```
+
+#### Condition comparisons
+
+```{r supplementary_study3-comparisons}
+
+descriptives = list()
+comparisons = list()
+for (measure in measures) {
+  for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3")) {
+    column = if (part == "Overall") measure else if (part == "Vignettes 1 and 3")
+      paste0(measure, "_without2") else paste0(measure, "_", substr(part, 10, 10))
+    d = data.frame(condition = df$condition, score = df[[column]])
+    model = lm(score ~ condition, data = d)
+    comparison = as.data.frame(summary(contrast(emmeans(model, ~ condition),
+                    method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
+    comparison$measure = measure
+    comparison$part = part
+    comparisons[[paste(measure, part)]] = comparison
+    descriptives[[paste(measure, part)]] = d %>% group_by(condition) %>%
+      summarise(n = n(), mean = mean(score), sd = sd(score)) %>%
+      mutate(measure = measure, part = part)
+  }
+}
+comparisons = bind_rows(comparisons)
+descriptives = bind_rows(descriptives)
+show_table(filter(descriptives, part == "Overall") %>% mutate(measure = unname(measure_labels[measure])))
+show_table(select(comparisons, measure, part, estimate, lower.CL, upper.CL, df, t.ratio, p.value) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study3 = list(descriptives = descriptives, comparisons = comparisons, score_checks = score_checks, n = nrow(df))
+
+```
+
+#### Registered reason comparisons
+
+```{r supplementary_study3-reasons}
+
+reason_comparisons = list()
+reason_descriptives = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  for (reason in c("Deserved", "Obligation")) {
+    d = data.frame(condition = df$condition,
+      score = rowMeans(df[paste0(measure, "V", 1:3, "Reason", reason)]))
+    model = lm(score ~ condition, data = d)
+    tab = as.data.frame(summary(contrast(emmeans(model, ~ condition),
+      method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
+    tab$measure = measure; tab$reason = reason
+    reason_comparisons[[paste(measure, reason)]] = tab
+    reason_descriptives[[paste(measure, reason)]] = d %>% group_by(condition) %>%
+      summarise(n = n(), mean = mean(score), sd = sd(score)) %>% mutate(measure = measure, reason = reason)
+  }
+}
+reason_comparisons = bind_rows(reason_comparisons)
+reason_descriptives = bind_rows(reason_descriptives)
+show_table(reason_descriptives %>% mutate(measure = unname(measure_labels[measure])))
+show_table(select(reason_comparisons, measure, reason, estimate, lower.CL, upper.CL, df, t.ratio, p.value) %>%
+             mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study3$reason_comparisons = reason_comparisons
+results$supplementary_study3$reason_descriptives = reason_descriptives
+
+```
+
+#### Mediation with parallel mediators
+
+```{r supplementary_study3-mediation}
+
+# Registration did not specify separate versus parallel mediators; retain the supplied parallel implementation.
+set.seed(20260913)
+mediation_results = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  stories = 1:3
+  m = data.frame(agency = as.numeric(df$condition == "Agency"),
+    y = rowMeans(df[paste0(measure, "_", stories)]),
+    deserved = rowMeans(df[paste0(measure, "V", stories, "ReasonDeserved")]),
+    obligation = rowMeans(df[paste0(measure, "V", stories, "ReasonObligation")]))
+  stopifnot(all(complete.cases(m)))
+  a_deserved = lm(deserved ~ agency, data = m)
+  a_obligation = lm(obligation ~ agency, data = m)
+  direct = lm(y ~ agency + deserved + obligation, data = m)
+  total = lm(y ~ agency, data = m)
+  paths = list("Condition to deservingness" = list(a_deserved, "agency"),
+               "Condition to obligation" = list(a_obligation, "agency"),
+               "Deservingness to outcome" = list(direct, "deserved"),
+               "Obligation to outcome" = list(direct, "obligation"),
+               "Direct condition effect" = list(direct, "agency"),
+               "Total condition effect" = list(total, "agency"))
+  rows = lapply(names(paths), function(label) {
+    fit = paths[[label]][[1]]; term = paths[[label]][[2]]
+    co = coef(summary(fit))[term, ]; ci = confint(fit, term)
+    data.frame(measure = measure, effect = label, estimate = co[1],
+      lower = ci[1], upper = ci[2], SE = co[2], df = df.residual(fit),
+      t = co[3], p.value = co[4], row.names = NULL)
+  })
+  statistic = function(data, indices) {
+    d = data[indices, ]; x = cbind(1, d$agency)
+    a1 = lm.fit(x, d$deserved)$coefficients[2]
+    a2 = lm.fit(x, d$obligation)$coefficients[2]
+    b = lm.fit(cbind(x, d$deserved, d$obligation), d$y)$coefficients
+    c(a1 * b[3], a2 * b[4], a1 * b[3] + a2 * b[4])
+  }
+  samples = boot(m, statistic, R = 5000)
+  stopifnot(all(is.finite(samples$t)))
+  ci = apply(samples$t, 2, quantile, probs = c(.025, .975))
+  indirect = data.frame(measure = measure,
+    effect = c("Indirect through deservingness", "Indirect through obligation", "Total indirect"),
+    estimate = as.numeric(samples$t0), lower = ci[1, ], upper = ci[2, ])
+  mediation_results[[measure]] = bind_rows(bind_rows(rows), indirect)
+}
+mediation_results = bind_rows(mediation_results)
+show_table(filter(mediation_results, !is.na(t)) %>% mutate(measure = unname(measure_labels[measure])))
+show_table(filter(mediation_results, is.na(t)) %>% select(measure, effect, estimate, lower, upper) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study3$mediation = mediation_results
+
+```
+
+#### Plots
+
+```{r supplementary_study3-plot}
+
+plot_data = df %>% select(participant, condition, SabotageBehavior, DeescalateBehavior) %>%
+  pivot_longer(c(SabotageBehavior, DeescalateBehavior), names_to = "outcome", values_to = "score")
+plot_data$outcome = factor(plot_data$outcome, levels = c("SabotageBehavior", "DeescalateBehavior"),
+                           labels = c("Sabotage", "De-escalation"))
+plot_summary = plot_data %>% group_by(condition, outcome) %>%
+  summarise(mean = mean(score), se = sd(score) / sqrt(n()), n = n()) %>%
+  mutate(lower = mean - qt(.975, n - 1) * se, upper = mean + qt(.975, n - 1) * se)
+plot.supplementary3 = ggplot(plot_data, aes(condition, score, color = condition)) +
+  geom_point(position = position_jitter(width = .16, height = 0, seed = 1),
+             alpha = .18, size = 1.5) +
+  geom_errorbar(data = plot_summary, aes(y = mean, ymin = lower, ymax = upper),
+                width = .10, color = "black", linewidth = .8) +
+  geom_point(data = plot_summary, aes(y = mean), shape = 21,
+             fill = "white", color = "black", size = 4, stroke = 1) +
+  geom_text(data = plot_summary,
+            aes(y = .35, label = paste0("n=", n)),
+            color = "#333333", size = 4.3) +
+  facet_wrap(~ outcome, nrow = 1) +
+  scale_color_manual(values = condition_colors, guide = "none") +
+  scale_y_continuous(breaks = 1:5) +
+  coord_cartesian(ylim = c(1, 5), clip = "off") +
+  labs(x = NULL, y = "Reported willingness\nto perform the behavior\n(1 = low; 5 = high)") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 18),
+        axis.title.y = element_text(size = 18, lineheight = .95),
+        axis.text = element_text(size = 16),
+        panel.spacing = unit(1, "cm"),
+        plot.margin = margin(5.5, 5.5, 25, 5.5))
+
+plot.supplementary3
+
+ggsave("../../figures/supplementary/study3/supplementary_study3.pdf",
+       plot.supplementary3, width = 12, height = 5, bg = "white")
+ggsave("../../figures/supplementary/study3/supplementary_study3.png",
+       plot.supplementary3, width = 12, height = 5, dpi = 600, bg = "white")
+
+```
+
+### Supplementary Study 4
+
+#### Data
+
+```{r supplementary_study4-data}
+
+raw = read_csv("../../data/supplementary/study4/raw.csv",
+               col_types = cols(.default = col_character()),
+               name_repair = ~ make.unique(str_trim(.x))) %>%
+  slice(-(1:2)) # Qualtrics question labels and import identifiers
+
+source = read_csv("../../data/supplementary/study4/supplied_cleaned.csv",
+                  col_types = cols(.default = col_character())) %>%
+  slice(-1) %>% # Supplied response-code row
+  rename_with(str_trim) %>%
+  mutate(across(c(Condition, ExclusionReason, Exclusion), as.numeric))
+
+selected = source %>% filter(Exclusion == 0)
+stopifnot(!anyDuplicated(raw$ResponseId), !anyDuplicated(selected$ID),
+          all(selected$ID %in% raw$ResponseId))
+
+# Join in the supplied participant order to preserve the bootstrap draws.
+raw = selected %>% select(participant = ID) %>%
+  left_join(raw, by = c("participant" = "ResponseId"))
+df = selected %>%
+  transmute(participant = factor(ID),
+            condition = factor(Condition, levels = c(1, 2),
+                               labels = c("Agency", "Compliance")))
+stopifnot(nrow(df) == 160, !anyNA(df$condition))
+
+# Map the two survey branches onto the same item names.
+mapping = tribble(
+  ~target, ~agency_column, ~compliance_column, ~coding,
+  "SabotageBehaviorV1Q1", "Agency_1_Sabotage_1", "Comp_1_Sabotage_1", "numeric",
+  "SabotageBehaviorV1Q2", "Agency_1_Sabotage_2", "Comp_1_Sabotage_2", "numeric",
+  "SabotageBehaviorV1Q3", "Agency_1_Sabotage_3", "Comp_1_Sabotage_3", "numeric",
+  "SabotageBehaviorV1Q4", "Agency_1_Sabotage_4", "Comp_1_Sabotage_4", "numeric",
+  "SabotageBehaviorV1Q5", "Agency_1_Sabotage_5", "Comp_1_Sabotage_5", "numeric",
+  "SabotageBehaviorV2Q1", "Agency_2_Sabotage_1", "Comp_2_Sabotage_1", "numeric",
+  "SabotageBehaviorV2Q2", "Agency_2_Sabotage_2", "Comp_2_Sabotage_2", "numeric",
+  "SabotageBehaviorV2Q3", "Agency_2_Sabotage_3", "Comp_2_Sabotage_3", "numeric",
+  "SabotageBehaviorV2Q4", "Agency_2_Sabotage_4", "Comp_2_Sabotage_4", "numeric",
+  "SabotageBehaviorV2Q5", "Agency_2_Sabotage_5", "Comp_2_Sabotage_5", "numeric",
+  "SabotageBehaviorV3Q1", "Agency_3_Sabotage_1", "Comp_3_Sabotage_1", "numeric",
+  "SabotageBehaviorV3Q2", "Agency_3_Sabotage_2", "Comp_3_Sabotage_2", "numeric",
+  "SabotageBehaviorV3Q3", "Agency_3_Sabotage_3", "Comp_3_Sabotage_3", "numeric",
+  "SabotageBehaviorV3Q4", "Agency_3_Sabotage_4", "Comp_3_Sabotage_4", "numeric",
+  "SabotageBehaviorV3Q5", "Agency_3_Sabotage_5", "Comp_3_Sabotage_5", "numeric",
+  "DeescalateBehaviorV1Q1", "Agency_1_Deescal_1", "Comp_1_Deescal_1", "numeric",
+  "DeescalateBehaviorV1Q2", "Agency_1_Deescal_2", "Comp_1_Deescal_2", "numeric",
+  "DeescalateBehaviorV1Q3", "Agency_1_Deescal_3", "Comp_1_Deescal_3", "numeric",
+  "DeescalateBehaviorV1Q4", "Agency_1_Deescal_4", "Comp_1_Deescal_4", "numeric",
+  "DeescalateBehaviorV1Q5", "Agency_1_Deescal_5", "Comp_1_Deescal_5", "numeric",
+  "DeescalateBehaviorV2Q1", "Agency_2_Deescal_1", "Comp_2_Deescal_1", "numeric",
+  "DeescalateBehaviorV2Q2", "Agency_2_Deescal_2", "Comp_2_Deescal_2", "numeric",
+  "DeescalateBehaviorV2Q3", "Agency_2_Deescal_3", "Comp_2_Deescal_3", "numeric",
+  "DeescalateBehaviorV2Q4", "Agency_2_Deescal_4", "Comp_2_Deescal_4", "numeric",
+  "DeescalateBehaviorV2Q5", "Agency_2_Deescal_5", "Comp_2_Deescal_5", "numeric",
+  "DeescalateBehaviorV3Q1", "Agency_3_Deescal_1", "Comp_3_Deescal_1", "numeric",
+  "DeescalateBehaviorV3Q2", "Agency_3_Deescal_2", "Comp_3_Deescal_2", "numeric",
+  "DeescalateBehaviorV3Q3", "Agency_3_Deescal_3", "Comp_3_Deescal_3", "numeric",
+  "DeescalateBehaviorV3Q4", "Agency_3_Deescal_4", "Comp_3_Deescal_4", "numeric",
+  "DeescalateBehaviorV3Q5", "Agency_3_Deescal_5", "Comp_3_Deescal_5", "numeric",
+  "SabotageBehaviorV1ReasonDeserved", "Agency_1_Sabotage_De", "Comp_1_Sabotage_Des", "numeric",
+  "SabotageBehaviorV1ReasonObligation", "Agency_1_Sabotage_O", "Comp_1_Sabotage_Obli", "numeric",
+  "SabotageBehaviorV2ReasonDeserved", "Agency_2_Sabotage_D", "Comp_2_Sabotage_Des", "numeric",
+  "SabotageBehaviorV2ReasonObligation", "Agency_2_Sabotage_O", "Comp_2_Sabotage_Obl", "numeric",
+  "SabotageBehaviorV3ReasonDeserved", "Agency_3_Sabotage_D", "Comp_3_Sabotage_Des", "numeric",
+  "SabotageBehaviorV3ReasonObligation", "Agency_3_Sabotage_O", "Comp_3_Sabotage_Obl", "numeric",
+  "DeescalateBehaviorV1ReasonDeserved", "Agency_1_Deescal_Des", "Comp_1_Deescal_Deser", "numeric",
+  "DeescalateBehaviorV1ReasonObligation", "Agency_1_Deescal_Ob", "Comp_1_Deescal_Obli", "numeric",
+  "DeescalateBehaviorV2ReasonDeserved", "Agency_2_Deescal_De", "Comp_2_Deescal_Dese", "numeric",
+  "DeescalateBehaviorV2ReasonObligation", "Agency_2_Deescal_Ob", "Comp_2_Deescal_Oblig", "numeric",
+  "DeescalateBehaviorV3ReasonDeserved", "Agency_3_Deescal_Des", "Comp_3_Deescal_Deser", "numeric",
+  "DeescalateBehaviorV3ReasonObligation", "Agency_3_Deescal_Obl", "Comp_3_Deescal_Oblig", "numeric"
+)
+
+columns = bind_rows(
+  mapping %>% transmute(target, column = agency_column, coding, branch = "Agency"),
+  mapping %>% transmute(target, column = compliance_column, coding, branch = "Compliance"))
+
+mapped = raw %>%
+  select(participant, all_of(unique(columns$column))) %>%
+  pivot_longer(-participant, names_to = "column", values_to = "response") %>%
+  inner_join(columns, by = "column", relationship = "many-to-many") %>%
+  left_join(df, by = "participant") %>%
+  filter(branch == condition) %>%
+  mutate(value = if_else(coding == "numeric", suppressWarnings(as.numeric(response)),
+    as.numeric(str_detect(str_c(",", replace_na(response, ""), ","),
+                          str_c(",", coding, ",")))))
+
+expected = selected %>%
+  select(participant = ID, all_of(mapping$target)) %>%
+  mutate(across(-participant, as.numeric)) %>%
+  pivot_longer(-participant, names_to = "target", values_to = "expected")
+
+item_checks = mapped %>% left_join(expected, by = c("participant", "target"))
+stopifnot(all(is.na(item_checks$value) == is.na(item_checks$expected)),
+          all(abs(item_checks$value - item_checks$expected) < 1e-6, na.rm = TRUE))
+
+# Confirm assignment agrees with the observed survey branch.
+stopifnot(all(!is.na(raw[[mapping$agency_column[1]]]) == (df$condition == "Agency")),
+          all(!is.na(raw[[mapping$compliance_column[1]]]) == (df$condition == "Compliance")))
+
+df = df %>%
+  left_join(mapped %>% select(participant, target, value) %>%
+              pivot_wider(names_from = target, values_from = value),
+            by = "participant") %>%
+  mutate(participant = factor(participant))
+
+measures = c("SabotageBehavior", "DeescalateBehavior")
+
+story_scores = mapped %>%
+  filter(str_detect(target, "Q[1-5]$")) %>%
+  separate(target, into = c("measure", "vignette", "item"), sep = "V|Q") %>%
+  group_by(participant, measure, vignette) %>%
+  summarise(score = mean(value, na.rm = TRUE), .groups = "drop")
+
+supplied_scores = selected %>%
+  select(participant = ID, matches("V[123]Avg$")) %>%
+  mutate(across(-participant, as.numeric)) %>%
+  pivot_longer(-participant, names_to = c("measure", "vignette"),
+               names_pattern = "(.*)V([123])Avg", values_to = "supplied")
+
+score_checks = story_scores %>%
+  left_join(supplied_scores, by = c("participant", "measure", "vignette")) %>%
+  group_by(measure, vignette) %>%
+  summarise(maximum_difference_from_supplied = max(abs(score - supplied))) %>%
+  mutate(vignette = as.numeric(vignette))
+stopifnot(all(score_checks$maximum_difference_from_supplied < .001))
+
+# Average answered items within each story, then weight stories equally.
+df = df %>%
+  left_join(story_scores %>%
+              pivot_wider(names_from = c(measure, vignette), values_from = score),
+            by = "participant") %>%
+  left_join(story_scores %>%
+              group_by(participant, measure) %>%
+              summarise(score = mean(score)) %>%
+              pivot_wider(names_from = measure, values_from = score),
+            by = "participant") %>%
+  left_join(story_scores %>%
+              filter(vignette != "2") %>%
+              group_by(participant, measure) %>%
+              summarise(score = mean(score)) %>%
+              mutate(measure = str_c(measure, "_without2")) %>%
+              pivot_wider(names_from = measure, values_from = score),
+            by = "participant") %>%
+  mutate(participant = factor(participant))
+
+df.supplementary4 = df
+show_table(score_checks)
+
+```
+
+#### Condition comparisons
+
+```{r supplementary_study4-comparisons}
+
+descriptives = list()
+comparisons = list()
+for (measure in measures) {
+  for (part in c("Overall", "Vignette 1", "Vignette 2", "Vignette 3")) {
+    column = if (part == "Overall") measure else if (part == "Vignettes 1 and 3")
+      paste0(measure, "_without2") else paste0(measure, "_", substr(part, 10, 10))
+    d = data.frame(condition = df$condition, score = df[[column]])
+    model = lm(score ~ condition, data = d)
+    comparison = as.data.frame(summary(contrast(emmeans(model, ~ condition),
+                    method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
+    comparison$measure = measure
+    comparison$part = part
+    comparisons[[paste(measure, part)]] = comparison
+    descriptives[[paste(measure, part)]] = d %>% group_by(condition) %>%
+      summarise(n = n(), mean = mean(score), sd = sd(score)) %>%
+      mutate(measure = measure, part = part)
+  }
+}
+comparisons = bind_rows(comparisons)
+descriptives = bind_rows(descriptives)
+show_table(filter(descriptives, part == "Overall") %>% mutate(measure = unname(measure_labels[measure])))
+show_table(select(comparisons, measure, part, estimate, lower.CL, upper.CL, df, t.ratio, p.value) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study4 = list(descriptives = descriptives, comparisons = comparisons, score_checks = score_checks, n = nrow(df))
+
+```
+
+#### Registered reason comparisons
+
+```{r supplementary_study4-reasons}
+
+reason_comparisons = list()
+reason_descriptives = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  for (reason in c("Deserved", "Obligation")) {
+    d = data.frame(condition = df$condition,
+      score = rowMeans(df[paste0(measure, "V", 1:3, "Reason", reason)]))
+    model = lm(score ~ condition, data = d)
+    tab = as.data.frame(summary(contrast(emmeans(model, ~ condition),
+      method = list("Agency - Compliance" = c(1, -1))), infer = TRUE))
+    tab$measure = measure; tab$reason = reason
+    reason_comparisons[[paste(measure, reason)]] = tab
+    reason_descriptives[[paste(measure, reason)]] = d %>% group_by(condition) %>%
+      summarise(n = n(), mean = mean(score), sd = sd(score)) %>% mutate(measure = measure, reason = reason)
+  }
+}
+reason_comparisons = bind_rows(reason_comparisons)
+reason_descriptives = bind_rows(reason_descriptives)
+show_table(reason_descriptives %>% mutate(measure = unname(measure_labels[measure])))
+show_table(select(reason_comparisons, measure, reason, estimate, lower.CL, upper.CL, df, t.ratio, p.value) %>%
+             mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study4$reason_comparisons = reason_comparisons
+results$supplementary_study4$reason_descriptives = reason_descriptives
+
+```
+
+#### Registered mediation with one mediator at a time
+
+```{r supplementary_study4-mediation}
+
+# Four separate paths; bootstrap method was not specified in the registration.
+set.seed(20260914)
+mediation_results = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  for (reason in c("Deserved", "Obligation")) {
+    d = data.frame(agency = as.numeric(df$condition == "Agency"), y = df[[measure]],
+      mediator = rowMeans(df[paste0(measure, "V", 1:3, "Reason", reason)]))
+    a = lm(mediator ~ agency, data = d)
+    b = lm(y ~ agency + mediator, data = d)
+    total = lm(y ~ agency, data = d)
+    paths = list("Condition to reason" = list(a, "agency"), "Reason to outcome" = list(b, "mediator"),
+                 "Direct condition effect" = list(b, "agency"), "Total condition effect" = list(total, "agency"))
+    rows = lapply(names(paths), function(label) {
+      fit = paths[[label]][[1]]; term = paths[[label]][[2]]
+      co = coef(summary(fit))[term, ]; ci = confint(fit, term)
+      data.frame(measure = measure, reason = reason, effect = label, estimate = co[1],
+        lower = ci[1], upper = ci[2], SE = co[2], df = df.residual(fit), t = co[3], p.value = co[4], row.names = NULL)
+    })
+    statistic = function(data, indices) {
+      d = data[indices, ]; a = lm.fit(cbind(1, d$agency), d$mediator)$coefficients[2]
+      b = lm.fit(cbind(1, d$agency, d$mediator), d$y)$coefficients[3]
+      a * b
+    }
+    samples = boot(d, statistic, R = 5000)
+    stopifnot(all(is.finite(samples$t)))
+    ci = quantile(samples$t, c(.025, .975))
+    indirect = data.frame(measure = measure, reason = reason, effect = "Indirect",
+      estimate = as.numeric(samples$t0), lower = ci[1], upper = ci[2])
+    mediation_results[[paste(measure, reason)]] = bind_rows(bind_rows(rows), indirect)
+  }
+}
+mediation_results = bind_rows(mediation_results)
+show_table(filter(mediation_results, effect != "Indirect") %>% mutate(measure = unname(measure_labels[measure])))
+show_table(filter(mediation_results, effect == "Indirect") %>% select(measure, reason, estimate, lower, upper) %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study4$mediation = mediation_results
+
+```
+
+#### Plots
+
+```{r supplementary_study4-plot}
+
+plot_data = df %>% select(participant, condition, SabotageBehavior, DeescalateBehavior) %>%
+  pivot_longer(c(SabotageBehavior, DeescalateBehavior), names_to = "outcome", values_to = "score")
+plot_data$outcome = factor(plot_data$outcome, levels = c("SabotageBehavior", "DeescalateBehavior"),
+                           labels = c("Sabotage", "De-escalation"))
+plot_summary = plot_data %>% group_by(condition, outcome) %>%
+  summarise(mean = mean(score), se = sd(score) / sqrt(n()), n = n()) %>%
+  mutate(lower = mean - qt(.975, n - 1) * se, upper = mean + qt(.975, n - 1) * se)
+plot.supplementary4 = ggplot(plot_data, aes(condition, score, color = condition)) +
+  geom_point(position = position_jitter(width = .16, height = 0, seed = 1),
+             alpha = .18, size = 1.5) +
+  geom_errorbar(data = plot_summary, aes(y = mean, ymin = lower, ymax = upper),
+                width = .10, color = "black", linewidth = .8) +
+  geom_point(data = plot_summary, aes(y = mean), shape = 21,
+             fill = "white", color = "black", size = 4, stroke = 1) +
+  geom_text(data = plot_summary,
+            aes(y = .35, label = paste0("n=", n)),
+            color = "#333333", size = 4.3) +
+  facet_wrap(~ outcome, nrow = 1) +
+  scale_color_manual(values = condition_colors, guide = "none") +
+  scale_y_continuous(breaks = 1:5) +
+  coord_cartesian(ylim = c(1, 5), clip = "off") +
+  labs(x = NULL, y = "Reported willingness\nto perform the behavior\n(1 = low; 5 = high)") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 18),
+        axis.title.y = element_text(size = 18, lineheight = .95),
+        axis.text = element_text(size = 16),
+        panel.spacing = unit(1, "cm"),
+        plot.margin = margin(5.5, 5.5, 25, 5.5))
+
+plot.supplementary4
+
+ggsave("../../figures/supplementary/study4/supplementary_study4.pdf",
+       plot.supplementary4, width = 12, height = 5, bg = "white")
+ggsave("../../figures/supplementary/study4/supplementary_study4.png",
+       plot.supplementary4, width = 12, height = 5, dpi = 600, bg = "white")
+
+```
+
+#### Exploratory demographic correlations
+
+```{r supplementary-correlations}
+
+correlations = list()
+for (measure in c("SabotageBehavior", "DeescalateBehavior")) {
+  for (variable in c("Age", "Income", "PoliticsEconomic", "PoliticsSocial", "JobYears",
+                     "JobObligation", "JobTalkDirectly", "JobServiceExperienceYears")) {
+    value = as.numeric(selected[[variable]])
+    keep = !is.na(value) & !is.na(df[[measure]])
+    test = cor.test(df[[measure]][keep], value[keep])
+    correlations[[paste(measure, variable)]] = data.frame(measure = measure,
+      variable = variable, n = sum(keep), r = unname(test$estimate), p.value = test$p.value)
+  }
+}
+correlations = bind_rows(correlations)
+show_table(correlations %>% mutate(measure = unname(measure_labels[measure])))
+results$supplementary_study4$correlations = correlations
+
+```
+
+## MODEL CHECKS
+
+```{r model-checks}
+
+models = list("study1.sabotage" = fit.study1.sabotage,
+  "study2.sabotage" = fit.study2.sabotage,
+  "study2.deescalation" = fit.study2.deescalation,
+  "study3a.sabotage" = fit.study3a.sabotage,
+  "study3a.deescalation" = fit.study3a.deescalation,
+  "study3b.sabotage" = fit.study3b.sabotage,
+  "study3b.deescalation" = fit.study3b.deescalation)
+
+model_checks = map_dfr(models, function(model) {
+  tibble(singular = isSingular(model),
+         optimizer_code = model@optinfo$conv$opt,
+         diagnostic = if (is.null(model@optinfo$conv$lme4$messages)) "None" else
+           paste(model@optinfo$conv$lme4$messages, collapse = "; "),
+         participant_variance = as.data.frame(VarCorr(model))$vcov[1],
+         residual_variance = sigma(model)^2)
+}, .id = "model")
+
+show_table(model_checks)
+stopifnot(all(model_checks$optimizer_code == 0), !any(model_checks$singular))
+results$primary = primary
+results$primary_checks = model_checks
+
+```
+
+## RESULTS
+
+```{r results}
+
+dput(results, file = "paper_results.txt")
+write_csv(bind_rows(primary$study1$contrasts %>% mutate(study = "Study 1"),
+                    primary$study2$contrasts %>% mutate(study = "Study 2"),
+                    primary$study3a$contrasts %>% mutate(study = "Study 3a"),
+                    primary$study3b$contrasts %>% mutate(study = "Study 3b")),
+          "paper_comparisons.csv")
+
+```
+
+# SESSION INFO
+
+```{r session}
+
+sessionInfo()
+
+```

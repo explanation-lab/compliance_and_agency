@@ -1,0 +1,62 @@
+Source: https://api.osf.io/v2/registrations/p5uja/
+Retrieved 10 September 2026
+
+data
+It's complicated. We have already collected some data but explain in Question 8 why readers may consider this a valid pre-registration nevertheless.
+
+hypothesis
+Hypotheses:
+People more likely to sabotage:
+- Will be in the moral agency condition
+- Will provide justifications based on their personal values such as seeking justice or being virtuous
+
+People more likely to de-escalate and help:
+- Will be in the compliance condition
+- Will provide justifications based on company policy reasons
+
+dependent
+Our key dependent variable will be how likely the participants will endorse either retaliatory response behaviors or deescalatory response behaviors. We will provide the same list of behaviors and ask two questions in each condition; the extent to which participants think the customer deserves them, and the extent to which participants would actually do them, as such:
+(compliance condition)
+Deserve: Based on the Service Policy’s trust of you to make decisions that reflect the mission of SerVest, to what extent does the customer deserve the following responses:
+Actual: Based on the Service Policy’s trust of you to make decisions that reflect the mission of SerVest, how likely is it that you would:
+(agency condition)
+Deserve: Based on the Service Policy’s trust of you to make decisions that reflect your values, to what extent does the customer deserve the following responses: 
+Actual: Based on the Service Policy’s trust of you to make decisions that reflect your values, how likely is it that you will: 
+
+The behaviors will be measured on a 5-point Likert scale (Not at all likely (1)  – Extremely likely (5)):
+1. 	Refuse to address the customer’s issue even though you could
+2. 	Intentionally put the customer on hold for a long period of time
+3. 	Purposefully transfer the customer to the wrong department
+4. 	Purposefully disconnect the call 
+5. 	Tell the customer that you fixed the issue, even though you didn't fix it
+6. 	Try to deescalate the situation over the phone
+7. 	Seek assistance from a colleague or manager
+8. 	Fix their issue as fast as possible
+9. 	Tough it out by disregarding the customer’s behaviors
+10.  Politely ask the customer to refrain from these behaviors
+
+
+conditions
+How many and which conditions will participants be assigned to?
+
+Participants will be assigned to one of two between-subjects priming conditions (compliance, agency). 
+
+analyses
+The study has tow hypotheses. The first will be examined with a two way analysis of variance (2x3) to test the effect of the condition (agency vs compliance) and vignette (1 vs 2 vs 3) on prosocial behavioral responses. The second hypothesis will similarly require an ANOVA except the dependent variable will be antisocial behavioral response. The focal result will be the main effect of condition, which will tell us whether increased agency is associated with more antisocial responses and increased compliance is associated with more prosocial responses. 
+
+outliers
+We will exclude participants who fail the attention checks embedded in the procedure, or the final item of the survey asking about attention. Failure of check 1 will entail two coders agreeing that the participant did not understand the policy. [Our measures include an open-ended manipulation check: respondent will be asked to “Please state the SerVest’s Service Policy you just read in your own words.” An independent coder will score the answers as to whether they indicate the respondent understood the policy as encouraging decision-making by following their moral compass or the company’s rules.] Failure of check 2 will entail any responses other than the single response indicating the participant paid attention.
+
+sample
+240
+
+other
+For exploratory purposes, we will also ask for participant's reasons for their selected response behaviors. We will provide an open ended response box which will be manually coded for themes such as seeking revenge, hoping for a raise etcetera. We expect that the desire for justice against a mean customer, will be a more compelling reason than the desire to treat the mean customer kindly, and this will underly the pattern of results in the primary finding. 
+
+name
+Moral Agency at Work: Does encouraging agency or compliance affect unethical behavior?
+
+study_type
+Experiment
+
+study_type_other
